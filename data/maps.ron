@@ -1,0 +1,57 @@
+[
+    (id: "bichen_city", name: "比奇城", version_origin: r#1.67, req_level: 1, req_map_kills: None, spawn_interval_ms: 0, safe_zone: true, spawns: [], boss: None),
+    (id: "bichen_field", name: "比奇省", version_origin: r#1.67, req_level: 1, req_map_kills: None, spawn_interval_ms: 1200, safe_zone: false, spawns: [
+        (monster: "chicken", weight: 45), (monster: "deer", weight: 30), (monster: "sheep", weight: 15), (monster: "hook_cat", weight: 10),
+    ], boss: None),
+    (id: "bichen_deep", name: "比奇省深处", version_origin: r#1.67, req_level: 6, req_map_kills: Some(("bichen_field", 40)), spawn_interval_ms: 1400, safe_zone: false, spawns: [
+        (monster: "hook_cat", weight: 40), (monster: "rake_cat", weight: 40), (monster: "scarecrow", weight: 20),
+    ], boss: None),
+    (id: "viper_valley", name: "毒蛇山谷", version_origin: r#1.67, req_level: 11, req_map_kills: Some(("bichen_deep", 50)), spawn_interval_ms: 1500, safe_zone: false, spawns: [
+        (monster: "cave_maggot", weight: 55), (monster: "spider", weight: 45),
+    ], boss: None),
+    (id: "orc_valley", name: "半兽人山谷", version_origin: r#1.67, req_level: 15, req_map_kills: Some(("viper_valley", 60)), spawn_interval_ms: 1600, safe_zone: false, spawns: [
+        (monster: "orc", weight: 70), (monster: "orc_warrior", weight: 30),
+    ], boss: None),
+    (id: "orc_temple", name: "半兽庙", version_origin: r#1.67, req_level: 18, req_map_kills: Some(("orc_valley", 80)), spawn_interval_ms: 1700, safe_zone: false, spawns: [
+        (monster: "orc_warrior", weight: 80), (monster: "orc", weight: 20),
+    ], boss: Some((monster: "orc_leader", respawn_ms: 180000, kills_to_unlock: 40))),
+    (id: "skeleton_cave", name: "骷髅洞", version_origin: r#1.67, req_level: 17, req_map_kills: Some(("orc_valley", 40)), spawn_interval_ms: 1600, safe_zone: false, spawns: [
+        (monster: "skeleton", weight: 50), (monster: "skeleton_soldier", weight: 25), (monster: "zombie", weight: 25),
+    ], boss: None),
+    (id: "death_coffin", name: "死亡棺材", version_origin: r#1.67, req_level: 22, req_map_kills: Some(("skeleton_cave", 80)), spawn_interval_ms: 1700, safe_zone: false, spawns: [
+        (monster: "corpse", weight: 55), (monster: "rotten", weight: 45),
+    ], boss: None),
+    (id: "woma_1", name: "沃玛寺庙一层", version_origin: r#1.67, req_level: 23, req_map_kills: Some(("death_coffin", 40)), spawn_interval_ms: 1800, safe_zone: false, spawns: [
+        (monster: "moth", weight: 35), (monster: "scorpion", weight: 30), (monster: "woma_warrior", weight: 35),
+    ], boss: None),
+    (id: "woma_2", name: "沃玛寺庙二层", version_origin: r#1.67, req_level: 26, req_map_kills: Some(("woma_1", 80)), spawn_interval_ms: 1800, safe_zone: false, spawns: [
+        (monster: "woma_warrior", weight: 55), (monster: "woma_guard", weight: 45),
+    ], boss: None),
+    (id: "woma_3", name: "沃玛寺庙三层", version_origin: r#1.67, req_level: 28, req_map_kills: Some(("woma_2", 100)), spawn_interval_ms: 2000, safe_zone: false, spawns: [
+        (monster: "woma_guard", weight: 60), (monster: "woma_champion", weight: 40),
+    ], boss: None),
+    (id: "woma_7", name: "沃玛寺庙七层", version_origin: r#1.67, req_level: 30, req_map_kills: Some(("woma_3", 120)), spawn_interval_ms: 2000, safe_zone: false, spawns: [
+        (monster: "woma_champion", weight: 70), (monster: "woma_guard", weight: 30),
+    ], boss: Some((monster: "woma_lord", respawn_ms: 600000, kills_to_unlock: 80))),
+    (id: "stone_tomb", name: "石墓阵", version_origin: r#1.67, req_level: 30, req_map_kills: Some(("woma_2", 40)), spawn_interval_ms: 1800, safe_zone: false, spawns: [
+        (monster: "nail_cat", weight: 100),
+    ], boss: None),
+    (id: "corpse_hall", name: "尸王殿", version_origin: r#1.67, req_level: 32, req_map_kills: Some(("stone_tomb", 60)), spawn_interval_ms: 2000, safe_zone: false, spawns: [
+        (monster: "corpse", weight: 50), (monster: "rotten", weight: 50),
+    ], boss: Some((monster: "corpse_king", respawn_ms: 480000, kills_to_unlock: 50))),
+    (id: "pig_cave", name: "猪洞", version_origin: r#1.67, req_level: 32, req_map_kills: Some(("woma_3", 40)), spawn_interval_ms: 1800, safe_zone: false, spawns: [
+        (monster: "beast", weight: 40), (monster: "rake_pig", weight: 40), (monster: "woma_pig", weight: 20),
+    ], boss: None),
+    (id: "zuma_1", name: "祖玛寺庙", version_origin: r#1.67, req_level: 36, req_map_kills: Some(("pig_cave", 80)), spawn_interval_ms: 1900, safe_zone: false, spawns: [
+        (monster: "zuma_archer", weight: 40), (monster: "zuma_statue", weight: 30), (monster: "zuma_guard", weight: 30),
+    ], boss: None),
+    (id: "zuma_7", name: "祖玛七层", version_origin: r#1.67, req_level: 40, req_map_kills: Some(("zuma_1", 150)), spawn_interval_ms: 2000, safe_zone: false, spawns: [
+        (monster: "zuma_guard", weight: 60), (monster: "zuma_statue", weight: 40),
+    ], boss: Some((monster: "zuma_lord", respawn_ms: 900000, kills_to_unlock: 100))),
+    (id: "red_moon", name: "赤月峡谷", version_origin: r#1.76, req_level: 46, req_map_kills: Some(("zuma_7", 80)), spawn_interval_ms: 2000, safe_zone: false, spawns: [
+        (monster: "red_demon", weight: 100),
+    ], boss: None),
+    (id: "bull_temple", name: "牛魔寺庙", version_origin: r#1.76, req_level: 50, req_map_kills: Some(("red_moon", 80)), spawn_interval_ms: 2100, safe_zone: false, spawns: [
+        (monster: "bull_head", weight: 100),
+    ], boss: Some((monster: "bull_king", respawn_ms: 1200000, kills_to_unlock: 80))),
+]

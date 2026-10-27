@@ -1,0 +1,35 @@
+[package]
+name = "game-tui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+default-run = "game-tui"
+
+[[bin]]
+name = "game-tui"
+path = "src/main.rs"
+
+[[bin]]
+name = "sim"
+path = "src/bin/sim.rs"
+
+[[bin]]
+name = "check-content"
+path = "src/bin/check.rs"
+
+[dependencies]
+game-core = { path = "../game-core" }
+game-data = { path = "../game-data" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+directories = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+unicode-width = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

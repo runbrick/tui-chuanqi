@@ -1,0 +1,31 @@
+//! 纯游戏规则。不读文件、不画终端。
+//!
+//! `(状态, 静态数据, 指令) → 新状态 + 事件`。RNG 在状态里，同一存档可复现。
+
+mod command;
+mod event;
+mod save;
+mod state;
+mod tick;
+
+pub use command::{
+    attack_interval_ms, class_label, compare_equip, upgrade_preview, validate_name, Command,
+    CoreError, StatDelta,
+};
+pub use event::{GameEvent, OfflineReport};
+pub use save::{
+    export_state, import_state, migrate_json, state_from_json, state_to_json, SavedGame,
+    SAVE_VERSION,
+};
+pub use state::{
+    ms_to_ticks, Achievement, Automation, GameState, ItemStack, LifetimeStats, PityKey,
+    SkillProgress, SLOT_COUNT,
+};
+
+/// 逻辑 tick 长度。
+pub const TICK_MS: u64 = 100;
+
+/// 仓库数据目录（相对本 crate）。
+pub fn repo_data_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data")
+}

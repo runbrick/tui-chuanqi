@@ -1,0 +1,5 @@
+/target
+*.log
+saves/
+.DS_Store
+*.tmp
