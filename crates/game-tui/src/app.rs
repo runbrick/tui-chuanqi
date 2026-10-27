@@ -96,6 +96,10 @@ pub struct App {
     pub message_at: Option<Instant>,
     /// 武器升级已经看过一次成功率，再按一次才执行。
     pub upgrade_armed: bool,
+    /// 伪装成时钟。游戏还在跑，画面不显示。
+    pub disguised: bool,
+    /// 当前店铺，只算有货的 NPC。
+    pub shop_index: usize,
     quit: bool,
     last_save: Instant,
 }
@@ -117,6 +121,8 @@ impl App {
             message: "方向键选择，Enter 进入，N 创建，D 删除".to_string(),
             message_at: None,
             upgrade_armed: false,
+            disguised: false,
+            shop_index: 0,
             quit: false,
             last_save: Instant::now(),
         })
@@ -232,17 +238,15 @@ impl App {
             self.quit = true;
             return;
         }
-        if matches!(self.screen, Screen::Help(_))
-            && matches!(key.code, KeyCode::Esc | KeyCode::Char('?'))
-        {
-            if let Screen::Help(prev) = std::mem::replace(&mut self.screen, Screen::List) {
-                self.screen = *prev;
-            }
+        if key.code == KeyCode::F(2) {
+            self.disguised = !self.disguised;
             return;
         }
-        if matches!(key.code, KeyCode::Char('?')) && !self.typing_name() {
-            let prev = std::mem::replace(&mut self.screen, Screen::List);
-            self.screen = Screen::Help(Box::new(prev));
+        if self.disguised {
+            return;
+        }
+        if self.help_key(key) {
+            self.toggle_help();
             return;
         }
         match &self.screen {
@@ -256,6 +260,29 @@ impl App {
             }
             Screen::Play => self.key_play(key.code),
             Screen::Help(_) => {}
+        }
+    }
+
+    fn help_key(&self, key: KeyEvent) -> bool {
+        if self.typing_name() && !matches!(self.screen, Screen::Help(_)) {
+            return false;
+        }
+        match key.code {
+            KeyCode::F(1) => true,
+            KeyCode::Char('?' | '？') => true,
+            KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => true,
+            _ => false,
+        }
+    }
+
+    fn toggle_help(&mut self) {
+        if matches!(self.screen, Screen::Help(_)) {
+            if let Screen::Help(prev) = std::mem::replace(&mut self.screen, Screen::List) {
+                self.screen = *prev;
+            }
+        } else {
+            let prev = std::mem::replace(&mut self.screen, Screen::List);
+            self.screen = Screen::Help(Box::new(prev));
         }
     }
 
@@ -305,6 +332,8 @@ impl App {
                 self.slot = Some(meta.id);
                 self.note(String::new());
                 self.log.clear();
+                let mut state = state;
+                game_core::compact_inventory(&mut state, &self.data);
                 self.state = Some(state);
                 self.last_save = Instant::now();
                 if report.ticks > 0 {
@@ -469,6 +498,8 @@ impl App {
             KeyCode::Char('6') => self.switch_panel(Panel::Stats),
             KeyCode::Up => self.move_selection(-1),
             KeyCode::Down => self.move_selection(1),
+            KeyCode::Left if self.panel == Panel::Shop => self.cycle_shop(-1),
+            KeyCode::Right if self.panel == Panel::Shop => self.cycle_shop(1),
             KeyCode::PageUp => self.move_selection(-8),
             KeyCode::PageDown => self.move_selection(8),
             KeyCode::Esc => {
@@ -515,16 +546,7 @@ impl App {
                 .filter(|skill| state.skills.contains_key(&skill.runtime_id))
                 .count(),
             Panel::Map => self.data.maps.len(),
-            Panel::Shop => self
-                .data
-                .npcs
-                .iter()
-                .flat_map(|npc| &npc.services)
-                .map(|service| match service {
-                    game_data::NpcService::Shop(shop) => shop.stock_ids.len(),
-                    _ => 0,
-                })
-                .sum(),
+            Panel::Shop => self.current_shop_items().len(),
             Panel::Combat | Panel::Stats => 0,
         }
     }
@@ -677,18 +699,48 @@ impl App {
         self.data.maps.get(self.selected).map(|map| map.runtime_id)
     }
 
-    fn selected_shop(&self) -> Option<(usize, usize)> {
-        let mut flat = Vec::new();
-        for (npc_index, npc) in self.data.npcs.iter().enumerate() {
-            for service in &npc.services {
-                if let game_data::NpcService::Shop(shop) = service {
-                    for stock_index in 0..shop.stock_ids.len() {
-                        flat.push((npc_index, stock_index));
-                    }
+    fn shop_npcs(&self) -> Vec<usize> {
+        self.data
+            .npcs
+            .iter()
+            .enumerate()
+            .filter(|(_, npc)| {
+                npc.services
+                    .iter()
+                    .any(|service| matches!(service, game_data::NpcService::Shop(_)))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn cycle_shop(&mut self, delta: i32) {
+        let shops = self.shop_npcs();
+        if shops.is_empty() {
+            return;
+        }
+        let len = shops.len() as i32;
+        self.shop_index = (self.shop_index as i32 + delta).rem_euclid(len) as usize;
+        self.selected = 0;
+    }
+
+    fn current_shop_items(&self) -> Vec<(usize, usize)> {
+        let shops = self.shop_npcs();
+        let Some(npc_index) = shops.get(self.shop_index.min(shops.len().saturating_sub(1))) else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        for service in &self.data.npcs[*npc_index].services {
+            if let game_data::NpcService::Shop(shop) = service {
+                for stock_index in 0..shop.stock_ids.len() {
+                    items.push((*npc_index, stock_index));
                 }
             }
         }
-        flat.get(self.selected).copied()
+        items
+    }
+
+    fn selected_shop(&self) -> Option<(usize, usize)> {
+        self.current_shop_items().get(self.selected).copied()
     }
 
     fn push_log(&mut self, line: LogLine) {

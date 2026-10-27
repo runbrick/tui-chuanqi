@@ -9,8 +9,8 @@ mod state;
 mod tick;
 
 pub use command::{
-    attack_interval_ms, class_label, compare_equip, upgrade_preview, validate_name, Command,
-    CoreError, StatDelta,
+    attack_interval_ms, class_label, compact_inventory, compare_equip, upgrade_preview,
+    validate_name, Command, CoreError, StatDelta,
 };
 pub use event::{GameEvent, OfflineReport};
 pub use save::{

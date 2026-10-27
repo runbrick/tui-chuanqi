@@ -254,6 +254,34 @@ impl Command {
     }
 }
 
+/// 把背包和仓库里可堆叠的东西并成一格，技能书和药一样。
+pub fn compact_inventory(state: &mut GameState, data: &GameData) {
+    compact(&mut state.inventory, data);
+    compact(&mut state.storage, data);
+}
+
+fn compact(slots: &mut Vec<ItemStack>, data: &GameData) {
+    let mut index = 0;
+    while index < slots.len() {
+        if !data.item(slots[index].item).stackable {
+            index += 1;
+            continue;
+        }
+        let item = slots[index].item;
+        let mut next = index + 1;
+        while next < slots.len() {
+            if slots[next].item == item {
+                let extra = slots[next].count;
+                slots[index].count = slots[index].count.saturating_add(extra);
+                slots.remove(next);
+            } else {
+                next += 1;
+            }
+        }
+        index += 1;
+    }
+}
+
 fn take_bag(state: &mut GameState, index: usize) -> Result<ItemStack, CoreError> {
     if index >= state.inventory.len() {
         return Err(CoreError::BadIndex);
@@ -341,7 +369,11 @@ fn use_item(
                 return Err(CoreError::AlreadyKnown);
             }
             let skill = book.skill_id;
-            state.inventory.remove(index);
+            if state.inventory[index].count > 1 {
+                state.inventory[index].count -= 1;
+            } else {
+                state.inventory.remove(index);
+            }
             state.skills.insert(
                 skill,
                 SkillProgress {

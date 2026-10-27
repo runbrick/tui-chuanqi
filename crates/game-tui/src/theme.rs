@@ -6,15 +6,24 @@ use ratatui::style::{Color, Modifier, Style};
 /// 品质色。
 pub fn quality(q: Quality) -> Color {
     match q {
-        Quality::White => Color::Gray,
+        Quality::White => Color::White,
         Quality::Green => Color::Green,
-        Quality::Blue => Color::Blue,
-        Quality::Purple => Color::Magenta,
-        Quality::Orange => Color::Rgb(255, 165, 0),
+        Quality::Blue => Color::LightBlue,
+        Quality::Purple => Color::Yellow,
+        Quality::Orange => Color::Red,
     }
 }
 
-/// 生命条颜色。
+/// 玩家看到的品质名：白、绿、蓝、黄、红。
+pub fn quality_name(q: Quality) -> &'static str {
+    match q {
+        Quality::White => "白",
+        Quality::Green => "绿",
+        Quality::Blue => "蓝",
+        Quality::Purple => "黄",
+        Quality::Orange => "红",
+    }
+}
 pub fn hp_color(ratio: f64) -> Color {
     if ratio < 0.3 {
         Color::Red
