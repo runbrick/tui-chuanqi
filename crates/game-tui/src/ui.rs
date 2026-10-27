@@ -95,14 +95,6 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     (year as i32, month as u32, day)
 }
 
-#[cfg(test)]
-mod clock_tests {
-    #[test]
-    fn unix_epoch_is_1970() {
-        assert_eq!(super::civil_from_days(0), (1970, 1, 1));
-    }
-}
-
 fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![Line::from(
         "选择角色。N 创建，D 删除，Enter 进入，Q 退出。同名可以同时存在。",
@@ -775,4 +767,12 @@ pub fn quality_name(quality: Quality) -> &'static str {
 /// 物品是不是衣服。界面解释性别不符时用得到。
 pub fn is_armor(kind: &ItemKind) -> bool {
     kind.is_armor()
+}
+
+#[cfg(test)]
+mod clock_tests {
+    #[test]
+    fn unix_epoch_is_1970() {
+        assert_eq!(super::civil_from_days(0), (1970, 1, 1));
+    }
 }
