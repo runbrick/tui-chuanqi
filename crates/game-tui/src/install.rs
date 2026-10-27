@@ -376,15 +376,25 @@ mod tests {
 
     #[test]
     fn path_entry_is_added_once() {
-        let (first, added) = merge_path("", r"C:\Users\a\AppData\Local\tui-game");
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let (dir, existing, extra_dir) = if cfg!(windows) {
+            (
+                r"C:\Users\a\AppData\Local\tui-game",
+                r"C:\Windows\system32",
+                r"D:\games",
+            )
+        } else {
+            ("/home/a/.local/share/tui-game", "/usr/bin", "/opt/games")
+        };
+        let (first, added) = merge_path("", dir);
         assert!(added);
-        assert_eq!(first, r"C:\Users\a\AppData\Local\tui-game");
-        let (second, again) = merge_path(&first, r"c:\users\a\appdata\local\tui-game");
+        assert_eq!(first, dir);
+        let (second, again) = merge_path(&first, &dir.to_ascii_lowercase());
         assert!(!again);
         assert_eq!(second, first);
-        let (third, extra) = merge_path(r"C:\Windows\system32;", r"D:\games");
+        let (third, extra) = merge_path(&format!("{existing}{sep}"), extra_dir);
         assert!(extra);
-        assert_eq!(third, r"C:\Windows\system32;D:\games");
+        assert_eq!(third, format!("{existing}{sep}{extra_dir}"));
     }
 
     #[test]
