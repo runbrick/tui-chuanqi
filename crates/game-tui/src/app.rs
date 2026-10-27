@@ -608,11 +608,52 @@ impl App {
         let Some((npc, stock_index)) = self.selected_shop() else {
             return;
         };
+        let notice = self.purchase_notice(npc, stock_index, count);
         self.command(Command::Buy {
             npc,
             stock_index,
             count,
         });
+        if let Some(text) = notice {
+            if self.message.is_empty() {
+                self.note(text);
+            }
+        }
+    }
+
+    /// 购买成功才提示。失败时 `command` 已经写了原因，这里不再覆盖。
+    fn purchase_notice(&self, npc: usize, stock_index: usize, count: u32) -> Option<String> {
+        let state = self.state.as_ref()?;
+        let shop = self
+            .data
+            .npcs
+            .get(npc)?
+            .services
+            .iter()
+            .find_map(|service| {
+                if let game_data::NpcService::Shop(shop) = service {
+                    Some(shop)
+                } else {
+                    None
+                }
+            })?;
+        let item = *shop.stock_ids.get(stock_index)?;
+        let def = self.data.item(item);
+        let unit = (f64::from(def.price) * f64::from(shop.buy_markup)).ceil() as u64;
+        let cost = unit.saturating_mul(u64::from(count));
+        if count == 0 || state.gold < cost {
+            return None;
+        }
+        let fits = if def.stackable {
+            state.inventory.iter().any(|stack| stack.item == item)
+                || state.inventory.len() < self.data.balance.inventory_slots as usize
+        } else {
+            state.inventory.len() + count as usize <= self.data.balance.inventory_slots as usize
+        };
+        if !fits {
+            return None;
+        }
+        Some(format!("买下 {} ×{count}，花费 {cost} 金币", def.name))
     }
 
     fn toggle_advance(&mut self) {
