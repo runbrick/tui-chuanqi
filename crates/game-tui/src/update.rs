@@ -1,6 +1,6 @@
 //! GitHub Releases 自动更新。
 //!
-//! 查 `latest`，下载本平台的 zip / tar.gz，解压后用脚本换掉当前可执行文件。
+//! 查 `latest`，下载本平台的 tar.gz，解压后用脚本换掉当前可执行文件。
 //! 网络和文件名解析都在这里，界面只看结果。
 
 use std::fs::File;
@@ -170,11 +170,7 @@ fn asset_name(os: &str, arch: &str) -> String {
         ("macos", "aarch64") => "aarch64-apple-darwin",
         _ => "unknown",
     };
-    if os == "windows" {
-        format!("r-chuanqi-{target}.zip")
-    } else {
-        format!("r-chuanqi-{target}.tar.gz")
-    }
+    format!("r-chuanqi-{target}.tar.gz")
 }
 
 fn validate_repo(repo: &str) -> Result<(), UpdateError> {

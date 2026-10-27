@@ -22,13 +22,10 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: zip
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive: tar
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: tar
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -53,16 +50,19 @@ jobs:
           cp "$bin" "$stage/"
           cp -R data "$stage/data"
           name="r-chuanqi-${{ matrix.target }}"
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            (cd dist && tar -a -cf "${name}.zip" tui-game)
-          else
-            tar -C dist -czf "dist/${name}.tar.gz" tui-game
+          # GitHub 的 bash 是 GNU tar。`tar -a *.zip` 不会写出 zip，只会写出普通 tar。
+          # 安装器按文件头认 gzip，所以三个平台都打 tar.gz。
+          tar -C dist -czf "dist/${name}.tar.gz" tui-game
+          sig=$(od -An -t x1 -N 2 "dist/${name}.tar.gz" | tr -d ' \n')
+          if [ "$sig" != "1f8b" ]; then
+            echo "安装包不是 gzip：$sig"
+            exit 1
           fi
           rm -rf "$stage"
       - name: installer
         shell: bash
         env:
-          TUI_GAME_PAYLOAD: dist/r-chuanqi-${{ matrix.target }}.${{ matrix.archive == 'zip' && 'zip' || 'tar.gz' }}
+          TUI_GAME_PAYLOAD: dist/r-chuanqi-${{ matrix.target }}.tar.gz
         run: |
           set -euo pipefail
           cargo build --release -p r-chuanqi --bin r-chuanqi-setup --target ${{ matrix.target }}
