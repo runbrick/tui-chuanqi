@@ -61,6 +61,12 @@ pub enum CoreError {
     /// 阈值超出当前精度。
     #[error("当前等级只能用固定阈值或 25% 一档")]
     ThresholdLocked,
+    /// 锁定的东西不能卖。
+    #[error("这件东西锁住了，先按 L 解锁")]
+    ItemLocked,
+    /// 强化过的武器不能直接卖。
+    #[error("强化过的武器不能卖")]
+    Upgraded,
 }
 
 /// 换装前后的属性差，正数是变强。
@@ -394,12 +400,22 @@ fn use_item(
 }
 
 fn sell_one(state: &mut GameState, data: &GameData, index: usize) -> Result<(), CoreError> {
+    let stack = state.inventory.get(index).ok_or(CoreError::BadIndex)?;
+    if stack.locked {
+        return Err(CoreError::ItemLocked);
+    }
+    if stack.upgrade > 0 {
+        return Err(CoreError::Upgraded);
+    }
     let stack = take_bag(state, index)?;
-    let rate = sell_rate(data);
-    let gold =
-        (f64::from(data.item(stack.item).price) * rate * f64::from(stack.count)).floor() as u64;
+    let gold = sale_gold(data, stack.item, stack.count);
     state.gold = state.gold.saturating_add(gold);
     Ok(())
+}
+
+/// 按商店卖出倍率算一堆能换多少金币。界面提示和实际入账用同一公式。
+pub fn sale_gold(data: &GameData, item: ItemId, count: u32) -> u64 {
+    (f64::from(data.item(item).price) * sell_rate(data) * f64::from(count)).floor() as u64
 }
 
 fn sell_junk(state: &mut GameState, data: &GameData) {

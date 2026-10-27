@@ -192,13 +192,13 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("F1、? 或 ？ 打开和关闭本页。Esc 也可以关闭。"),
         Line::from(""),
         Line::from("1 战斗    看当前的怪和自己的出手"),
-        Line::from("2 背包    ↑↓ 选择，Enter 使用或穿戴，L 锁定，PgUp/PgDn 翻页"),
+        Line::from("2 背包    ↑↓ 选择，Enter 使用或穿戴，S 卖掉选中，L 锁定"),
         Line::from("3 技能    Enter 开关自动施放"),
         Line::from("4 地图    Enter 进入，A 开关自动换图"),
         Line::from("5 商店    只在比奇城。←→ 换店铺，Enter 买 1 个，+ 买 10 个"),
         Line::from("6 统计    击杀、金币、每小时经验"),
         Line::from(""),
-        Line::from("X 卖掉白色装备    R 修理    F 把药补到 20 瓶"),
+        Line::from("X 卖掉未锁定的白装    R 修理    F 把药补到 20 瓶"),
         Line::from("U 武器升级，先看成功率，再按一次才执行"),
         Line::from("F2 伪装成时钟，再按一次恢复"),
         Line::from("Q 保存并退出"),
@@ -395,7 +395,7 @@ fn draw_bag(frame: &mut Frame, app: &App, area: Rect) {
     };
     let pages = total.div_ceil(visible.max(1)).max(1);
     let mut lines = vec![Line::from(format!(
-        "Enter 使用或穿戴，L 锁定。PgUp/PgDn 翻页。{page}/{pages}"
+        "Enter 使用或穿戴，S 卖掉选中，X 卖白装，L 锁定。{page}/{pages}"
     ))];
     if total == 0 {
         lines.push(Line::from("背包是空的"));
@@ -408,7 +408,13 @@ fn draw_bag(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             String::new()
         };
-        let mut text = format!("{}{rank}{} ×{}", def.name, item_note(def), stack.count);
+        let mut text = format!(
+            "{}{rank}{} ×{}  卖{}金",
+            def.name,
+            item_note(def),
+            stack.count,
+            game_core::sale_gold(&app.data, stack.item, stack.count)
+        );
         if let Some(delta) = compare_equip(state, &app.data, index) {
             text.push_str(&format_delta(delta.attack_min, delta.attack_max));
         }

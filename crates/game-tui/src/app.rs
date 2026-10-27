@@ -508,7 +508,8 @@ impl App {
             }
             KeyCode::Enter => self.activate(),
             KeyCode::Char('l') => self.lock_selected(),
-            KeyCode::Char('x') => self.command(Command::SellJunk),
+            KeyCode::Char('s') => self.sell_selected(),
+            KeyCode::Char('x') => self.sell_junk(),
             KeyCode::Char('r') => self.town_service(Command::Repair),
             KeyCode::Char('f') => self.town_service(Command::Restock { hp: 20, mp: 20 }),
             KeyCode::Char('a') => self.toggle_advance(),
@@ -669,6 +670,76 @@ impl App {
             self.command(Command::LockInventory {
                 index: self.selected,
             });
+        }
+    }
+
+    /// 卖掉背包里选中的那一格。不限品质，锁定和强化过的会拒绝。
+    fn sell_selected(&mut self) {
+        if self.panel != Panel::Bag {
+            self.note("先打开背包，再按 S 卖掉选中的东西。");
+            return;
+        }
+        let index = self.selected;
+        let notice = self.sale_notice(index);
+        self.command(Command::Sell { index });
+        if let Some(text) = notice {
+            if self.message.is_empty() {
+                self.note(text);
+            }
+        }
+        self.clamp_selection();
+    }
+
+    fn sale_notice(&self, index: usize) -> Option<String> {
+        let state = self.state.as_ref()?;
+        let stack = state.inventory.get(index)?;
+        if stack.locked || stack.upgrade > 0 {
+            return None;
+        }
+        let def = self.data.item(stack.item);
+        let gold = game_core::sale_gold(&self.data, stack.item, stack.count);
+        Some(format!(
+            "卖出 {} ×{}，获得 {gold} 金币",
+            def.name, stack.count
+        ))
+    }
+
+    /// 清空白装。没有可卖的也要说一声，避免按了没反应。
+    fn sell_junk(&mut self) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let mut pieces = 0u32;
+        let mut gold = 0u64;
+        for stack in &state.inventory {
+            let def = self.data.item(stack.item);
+            let junk = def.quality == game_data::Quality::White
+                && def.kind.gear().is_some()
+                && !stack.locked
+                && stack.upgrade == 0;
+            if junk {
+                pieces = pieces.saturating_add(stack.count);
+                gold =
+                    gold.saturating_add(game_core::sale_gold(&self.data, stack.item, stack.count));
+            }
+        }
+        self.command(Command::SellJunk);
+        if self.message.is_empty() {
+            if pieces == 0 {
+                self.note("没有可卖的白装。锁定的不会卖掉。");
+            } else {
+                self.note(format!("卖掉白装 {pieces} 件，获得 {gold} 金币"));
+            }
+        }
+        self.clamp_selection();
+    }
+
+    fn clamp_selection(&mut self) {
+        let len = self.selection_len();
+        if len == 0 {
+            self.selected = 0;
+        } else if self.selected >= len {
+            self.selected = len - 1;
         }
     }
 
