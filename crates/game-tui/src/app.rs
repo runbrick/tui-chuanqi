@@ -38,6 +38,8 @@ pub enum Screen {
     Create(CreateForm),
     /// 删除确认。
     Delete(DeleteForm),
+    /// 出售确认。战斗仍在暂停，填数量后才卖掉。
+    Sell(SellForm),
     /// 离线报告。
     Report(String),
     /// 游戏中。
@@ -68,6 +70,16 @@ pub struct DeleteForm {
     pub index: usize,
     /// 已输入的确认文字。
     pub confirm: String,
+}
+
+/// 出售确认。数量是玩家正在输入的数字。
+pub struct SellForm {
+    /// 背包下标。确认期间不能换选中。
+    pub index: usize,
+    /// 已输入的数量，空着表示还没填。
+    pub digits: String,
+    /// 校验错误。
+    pub error: String,
 }
 
 /// 整个前端状态。
@@ -253,6 +265,7 @@ impl App {
             Screen::List => self.key_list(key.code),
             Screen::Create(_) => self.key_create(key),
             Screen::Delete(_) => self.key_delete(key),
+            Screen::Sell(_) => self.key_sell(key),
             Screen::Report(_) => {
                 if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
                     self.screen = Screen::Play;
@@ -289,7 +302,7 @@ impl App {
     fn typing_name(&self) -> bool {
         match &self.screen {
             Screen::Create(form) => form.step == 2,
-            Screen::Delete(_) => true,
+            Screen::Delete(_) | Screen::Sell(_) => true,
             _ => false,
         }
     }
@@ -673,15 +686,86 @@ impl App {
         }
     }
 
-    /// 卖掉背包里选中的那一格。不限品质，锁定和强化过的会拒绝。
+    /// 卖掉背包里选中的那一格。先填数量，回车才成交。
     fn sell_selected(&mut self) {
         if self.panel != Panel::Bag {
             self.note("先打开背包，再按 S 卖掉选中的东西。");
             return;
         }
-        let index = self.selected;
-        let notice = self.sale_notice(index);
-        self.command(Command::Sell { index });
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let Some(stack) = state.inventory.get(self.selected) else {
+            self.note("背包是空的。");
+            return;
+        };
+        if stack.locked {
+            self.note(CoreError::ItemLocked.to_string());
+            return;
+        }
+        if stack.upgrade > 0 {
+            self.note(CoreError::Upgraded.to_string());
+            return;
+        }
+        self.screen = Screen::Sell(SellForm {
+            index: self.selected,
+            digits: stack.count.to_string(),
+            error: String::new(),
+        });
+    }
+
+    fn key_sell(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.screen = Screen::Play,
+            KeyCode::Char(ch) if ch.is_ascii_digit() => {
+                if let Screen::Sell(form) = &mut self.screen {
+                    if form.digits.len() < 6 {
+                        form.digits.push(ch);
+                        form.error.clear();
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Screen::Sell(form) = &mut self.screen {
+                    form.digits.pop();
+                    form.error.clear();
+                }
+            }
+            KeyCode::Enter => self.finish_sell(),
+            _ => {}
+        }
+    }
+
+    fn finish_sell(&mut self) {
+        let Screen::Sell(form) = &self.screen else {
+            return;
+        };
+        let index = form.index;
+        let digits = form.digits.clone();
+        let count: u32 = match digits.parse() {
+            Ok(count) if count > 0 => count,
+            _ => {
+                if let Screen::Sell(form) = &mut self.screen {
+                    form.error = "请输入大于 0 的数量".to_string();
+                }
+                return;
+            }
+        };
+        let owned = self
+            .state
+            .as_ref()
+            .and_then(|state| state.inventory.get(index))
+            .map(|stack| stack.count)
+            .unwrap_or(0);
+        if count > owned {
+            if let Screen::Sell(form) = &mut self.screen {
+                form.error = format!("这一格只有 {owned} 个");
+            }
+            return;
+        }
+        let notice = self.sale_notice(index, count);
+        self.screen = Screen::Play;
+        self.command(Command::Sell { index, count });
         if let Some(text) = notice {
             if self.message.is_empty() {
                 self.note(text);
@@ -690,18 +774,15 @@ impl App {
         self.clamp_selection();
     }
 
-    fn sale_notice(&self, index: usize) -> Option<String> {
+    fn sale_notice(&self, index: usize, count: u32) -> Option<String> {
         let state = self.state.as_ref()?;
         let stack = state.inventory.get(index)?;
-        if stack.locked || stack.upgrade > 0 {
+        if stack.locked || stack.upgrade > 0 || count == 0 || count > stack.count {
             return None;
         }
         let def = self.data.item(stack.item);
-        let gold = game_core::sale_gold(&self.data, stack.item, stack.count);
-        Some(format!(
-            "卖出 {} ×{}，获得 {gold} 金币",
-            def.name, stack.count
-        ))
+        let gold = game_core::sale_gold(&self.data, stack.item, count);
+        Some(format!("卖出 {} ×{count}，获得 {gold} 金币", def.name))
     }
 
     /// 清空白装。没有可卖的也要说一声，避免按了没反应。

@@ -1,6 +1,6 @@
 //! 面板绘制。战斗日志一直留在下面。
 
-use crate::app::{App, CreateForm, DeleteForm, Panel, Screen};
+use crate::app::{App, CreateForm, DeleteForm, Panel, Screen, SellForm};
 use crate::theme;
 use crate::util::{bar, pad_to};
 use game_core::{compare_equip, CoreError};
@@ -36,6 +36,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::List => draw_list(frame, app, area),
         Screen::Create(form) => draw_create(frame, form, area),
         Screen::Delete(form) => draw_delete(frame, app, form, area),
+        Screen::Sell(form) => draw_sell(frame, app, form, area),
         Screen::Report(text) => draw_report(frame, text, area),
         Screen::Help(_) => draw_help(frame, area),
         Screen::Play => draw_play(frame, app, area),
@@ -181,6 +182,38 @@ fn draw_delete(frame: &mut Frame, app: &App, form: &DeleteForm, area: Rect) {
     frame.render_widget(panel("删除角色", lines), area);
 }
 
+fn draw_sell(frame: &mut Frame, app: &App, form: &SellForm, area: Rect) {
+    let stack = app
+        .state
+        .as_ref()
+        .and_then(|state| state.inventory.get(form.index));
+    let (name, owned, gold) = match stack {
+        Some(stack) => {
+            let def = app.data.item(stack.item);
+            let count = form.digits.parse::<u32>().unwrap_or(0).min(stack.count);
+            (
+                def.name.clone(),
+                stack.count,
+                game_core::sale_gold(&app.data, stack.item, count),
+            )
+        }
+        None => ("这件东西已经不在了".to_string(), 0, 0),
+    };
+    let typed = if form.digits.is_empty() {
+        "_".to_string()
+    } else {
+        form.digits.clone()
+    };
+    let lines = vec![
+        Line::from(format!("出售 {name}，这一格有 {owned} 个。")),
+        Line::from("输入数量后按 Enter 确认。Esc 取消。"),
+        Line::from(format!("数量：{typed}")),
+        Line::from(format!("可得 {gold} 金币")),
+        Line::from(Span::styled(form.error.clone(), theme::death())),
+    ];
+    frame.render_widget(panel("确认出售", lines), area);
+}
+
 fn draw_report(frame: &mut Frame, text: &str, area: Rect) {
     let mut lines: Vec<Line> = text.lines().map(Line::from).collect();
     lines.push(Line::from("Enter 继续。"));
@@ -192,7 +225,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("F1、? 或 ？ 打开和关闭本页。Esc 也可以关闭。"),
         Line::from(""),
         Line::from("1 战斗    看当前的怪和自己的出手"),
-        Line::from("2 背包    ↑↓ 选择，Enter 使用或穿戴，S 卖掉选中，L 锁定"),
+        Line::from("2 背包    ↑↓ 选择，S 出售（先填数量），L 锁定"),
         Line::from("3 技能    Enter 开关自动施放"),
         Line::from("4 地图    Enter 进入，A 开关自动换图"),
         Line::from("5 商店    只在比奇城。←→ 换店铺，Enter 买 1 个，+ 买 10 个"),
@@ -395,7 +428,7 @@ fn draw_bag(frame: &mut Frame, app: &App, area: Rect) {
     };
     let pages = total.div_ceil(visible.max(1)).max(1);
     let mut lines = vec![Line::from(format!(
-        "Enter 使用或穿戴，S 卖掉选中，X 卖白装，L 锁定。{page}/{pages}"
+        "Enter 使用或穿戴，S 出售，X 卖白装，L 锁定。{page}/{pages}"
     ))];
     if total == 0 {
         lines.push(Line::from("背包是空的"));

@@ -67,6 +67,9 @@ pub enum CoreError {
     /// 强化过的武器不能直接卖。
     #[error("强化过的武器不能卖")]
     Upgraded,
+    /// 这一格没有这么多。
+    #[error("数量不够，这叠只有 {0} 个")]
+    NotEnoughCount(u32),
 }
 
 /// 换装前后的属性差，正数是变强。
@@ -125,10 +128,12 @@ pub enum Command {
         /// 背包下标。
         index: usize,
     },
-    /// 卖掉一件。
+    /// 卖掉背包里的若干个。数量不能超过这一格。
     Sell {
         /// 背包下标。
         index: usize,
+        /// 卖出数量。
+        count: u32,
     },
     /// 卖掉白色未强化装备。
     SellJunk,
@@ -221,7 +226,7 @@ impl Command {
             Self::Drop { index } => {
                 let _ = take_bag(state, index)?;
             }
-            Self::Sell { index } => sell_one(state, data, index)?,
+            Self::Sell { index, count } => sell_one(state, data, index, count)?,
             Self::SellJunk => sell_junk(state, data),
             Self::Buy {
                 npc,
@@ -399,7 +404,15 @@ fn use_item(
     Ok(())
 }
 
-fn sell_one(state: &mut GameState, data: &GameData, index: usize) -> Result<(), CoreError> {
+fn sell_one(
+    state: &mut GameState,
+    data: &GameData,
+    index: usize,
+    count: u32,
+) -> Result<(), CoreError> {
+    if count == 0 {
+        return Ok(());
+    }
     let stack = state.inventory.get(index).ok_or(CoreError::BadIndex)?;
     if stack.locked {
         return Err(CoreError::ItemLocked);
@@ -407,8 +420,16 @@ fn sell_one(state: &mut GameState, data: &GameData, index: usize) -> Result<(), 
     if stack.upgrade > 0 {
         return Err(CoreError::Upgraded);
     }
-    let stack = take_bag(state, index)?;
-    let gold = sale_gold(data, stack.item, stack.count);
+    if count > stack.count {
+        return Err(CoreError::NotEnoughCount(stack.count));
+    }
+    let item = stack.item;
+    if count == stack.count {
+        let _ = take_bag(state, index)?;
+    } else {
+        state.inventory[index].count -= count;
+    }
+    let gold = sale_gold(data, item, count);
     state.gold = state.gold.saturating_add(gold);
     Ok(())
 }
