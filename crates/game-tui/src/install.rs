@@ -352,6 +352,7 @@ pub fn append_shell_line(existing: &str, line: &str) -> Option<String> {
     Some(next)
 }
 
+#[cfg(any(windows, test))]
 fn decode_reg_text(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
         .chunks_exact(2)
@@ -361,6 +362,7 @@ fn decode_reg_text(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&units)
 }
 
+#[cfg(any(windows, test))]
 fn encode_reg_text(text: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for unit in text.encode_utf16() {
