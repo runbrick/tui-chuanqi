@@ -1,0 +1,78 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: build
+        run: cargo build --release -p game-tui --bin game-tui --target ${{ matrix.target }}
+      - name: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="dist/tui-game"
+          rm -rf dist
+          mkdir -p "$stage"
+          bin="target/${{ matrix.target }}/release/game-tui"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            bin="${bin}.exe"
+          fi
+          cp "$bin" "$stage/"
+          cp -R data "$stage/data"
+          name="tui-game-${{ matrix.target }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd dist && tar -a -cf "${name}.zip" tui-game)
+          else
+            tar -C dist -czf "dist/${name}.tar.gz" tui-game
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tui-game-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$tag" \
+            --notes "自动构建。Windows 解压后运行 game-tui.exe，其它平台运行 game-tui。存档仍在系统数据目录，不会被这次更新覆盖。" \
+            --verify-tag

@@ -30,6 +30,10 @@ tracing-subscriber = { workspace = true }
 unicode-width = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+native-tls = { workspace = true }
+zip = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
 
 [lints]
 workspace = true

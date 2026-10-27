@@ -54,7 +54,7 @@ proptest    = "1"         # 属性测试：验证"模拟永不 panic / 数值不
 ### 几个关键依赖的理由
 
 - **`rand_pcg` 而不是默认 `StdRng`**：`StdRng` 的算法在 rand 版本间可能变化，而我们要求「同一存档 + 同一种子 → 同样结果」在升级后依然成立。PCG64 有稳定性保证。
-- **不用 `tokio`**：没有网络、没有并发 IO。固定 tick 的游戏循环用 `std::thread::sleep` + `Instant` 就够了，引入异步只会让游戏状态被迫 `Arc<Mutex<_>>` 包起来。
+- **不用 `tokio`**：游戏循环仍然是固定 tick。自动更新只在后台线程里用一次阻塞的 HTTPS 请求，不把游戏状态拖进异步运行时。
 - **RON 而不是 JSON 做静态数据**：RON 支持枚举变体字面量（`Effect::Poison(green, 3.0)`）、尾逗号、注释。写内容表时体验差别很大。
 - **存档用 JSON**：方便出问题时直接手改，也便于你肉眼 review 平衡性。
 - **日志绝不能进 stdout**：TUI 独占终端。统一 `tracing` + `tracing-appender` 写到文件。

@@ -6,6 +6,7 @@ pub mod paths;
 pub mod saveio;
 pub mod theme;
 pub mod ui;
+pub mod update;
 pub mod util;
 
 pub use paths::{default_save_root, find_data_dir};

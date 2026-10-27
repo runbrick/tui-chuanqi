@@ -24,7 +24,8 @@ fn run() -> Result<(), String> {
     let data = GameData::load(&data_dir).map_err(|err| err.to_string())?;
     init_tracing();
     let store = game_tui::SaveStore::open(default_save_root())?;
-    let app = App::open(data, store)?;
+    let mut app = App::open(data, store)?;
+    app.start_update_check();
     let mut terminal = setup_terminal().map_err(|err| err.to_string())?;
     install_panic_hook();
     let result = app.run(&mut terminal);

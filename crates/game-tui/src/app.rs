@@ -3,10 +3,12 @@
 use crate::logfmt::{format_event, LogLine};
 use crate::saveio::{CharacterMeta, SaveStore};
 use crate::ui;
+use crate::update::{self, Release};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use game_core::{validate_name, Command, CoreError, GameEvent, GameState};
 use game_data::{Class, GameData, Gender};
 use std::collections::VecDeque;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 const TICK: Duration = Duration::from_millis(100);
@@ -112,6 +114,9 @@ pub struct App {
     pub disguised: bool,
     /// 当前店铺，只算有货的 NPC。
     pub shop_index: usize,
+    /// 后台查到的新版本。没有就是还没查完或已经是最新。
+    pub update: Option<Release>,
+    update_rx: Option<Receiver<Result<Option<Release>, String>>>,
     quit: bool,
     last_save: Instant,
 }
@@ -135,9 +140,21 @@ impl App {
             upgrade_armed: false,
             disguised: false,
             shop_index: 0,
+            update: None,
+            update_rx: None,
             quit: false,
             last_save: Instant::now(),
         })
+    }
+
+    /// 后台问 GitHub Releases 有没有更新的版本。失败不打断游戏。
+    pub fn start_update_check(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.update_rx = Some(rx);
+        std::thread::spawn(move || {
+            let found = update::check_latest().map_err(|err| err.to_string());
+            let _ = tx.send(found);
+        });
     }
 
     /// 跑到玩家退出。调用方负责终端模式。
@@ -153,6 +170,7 @@ impl App {
             last = now;
             self.poll_input()?;
             self.expire_message();
+            self.poll_update();
             let mut steps = 0;
             while acc >= TICK && steps < MAX_CATCHUP {
                 self.step_logic();
@@ -257,6 +275,9 @@ impl App {
         if self.disguised {
             return;
         }
+        if matches!(key.code, KeyCode::Char('u' | 'U')) && self.apply_update() {
+            return;
+        }
         if self.help_key(key) {
             self.toggle_help();
             return;
@@ -296,6 +317,55 @@ impl App {
         } else {
             let prev = std::mem::replace(&mut self.screen, Screen::List);
             self.screen = Screen::Help(Box::new(prev));
+        }
+    }
+
+    fn poll_update(&mut self) {
+        let Some(rx) = &self.update_rx else {
+            return;
+        };
+        let message = match rx.try_recv() {
+            Ok(Ok(Some(release))) => {
+                let text = format!(
+                    "有新版本 {}（现在是 {}）。按 U 下载并重启。",
+                    release.version,
+                    update::current_version()
+                );
+                self.update = Some(release);
+                text
+            }
+            Ok(Ok(None)) => String::new(),
+            Ok(Err(err)) => {
+                tracing::warn!(error = %err, "查更新失败");
+                String::new()
+            }
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => String::new(),
+        };
+        self.update_rx = None;
+        if !message.is_empty() {
+            self.note(message);
+        }
+    }
+
+    /// 有待安装的版本就下载、换掉当前程序并退出。没有就返回 false，让原来的按键继续生效。
+    fn apply_update(&mut self) -> bool {
+        let Some(release) = self.update.clone() else {
+            return false;
+        };
+        if self.typing_name() {
+            return false;
+        }
+        self.save_if_playing();
+        match update::install(&release) {
+            Ok(()) => {
+                self.quit = true;
+                true
+            }
+            Err(err) => {
+                self.note(err.to_string());
+                true
+            }
         }
     }
 

@@ -224,7 +224,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("6 统计    击杀、金币、每小时经验"),
         Line::from(""),
         Line::from("X 卖掉未锁定的白装    R 修理    F 把药补到 20 瓶"),
-        Line::from("U 武器升级，先看成功率，再按一次才执行"),
+        Line::from("U 武器升级，先看成功率，再按一次才执行（有新版本时，U 改为下载并重启）"),
         Line::from("F2 伪装成时钟，再按一次恢复"),
         Line::from("Q 保存并退出"),
         Line::from(""),
