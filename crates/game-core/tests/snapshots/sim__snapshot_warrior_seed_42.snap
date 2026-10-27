@@ -2,4 +2,4 @@
 source: crates/game-core/tests/sim.rs
 expression: state.summary(&data)
 ---
-name=战士 class=Warrior lv=3 exp=400 hp=44/56 mp=17/17 atk=4-8 def=0-1 gold=480 kills=86 map=bichen_field
+name=战士 class=Warrior lv=3 exp=401 hp=36/56 mp=17/17 atk=4-8 def=0-1 gold=364 kills=71 map=bichen_field

@@ -18,7 +18,7 @@ pub struct LogLine {
 /// 格式化一条事件。
 pub fn format_event(event: &GameEvent, data: &GameData) -> LogLine {
     let monster = |id| data.monster(id).name.clone();
-    let item = |id| data.item(id).name.clone();
+    let item = |id| item_label(data, id);
     let skill = |id| data.skill(id).name.clone();
     let map_name = |id| data.map(id).name.clone();
     let mut line = LogLine {
@@ -102,4 +102,32 @@ pub fn format_event(event: &GameEvent, data: &GameData) -> LogLine {
         line.text = format!("掉落 {}×{count}{star}", item(*id));
     }
     line
+}
+
+/// 掉落和喝药日志里也带上职业、回复量，和背包用同一套说法。
+fn item_label(data: &GameData, id: game_data::ItemId) -> String {
+    let def = data.item(id);
+    match &def.kind {
+        game_data::ItemKind::SkillBook(book) => {
+            format!("{}[{}]", def.name, book.req_class.label())
+        }
+        game_data::ItemKind::Consumable(potion) => {
+            format!("{}{}", def.name, potion_label(potion))
+        }
+        _ => def.name.clone(),
+    }
+}
+
+fn potion_label(potion: &game_data::ConsumableDef) -> String {
+    let mut parts = Vec::new();
+    if potion.heal_hp > 0 {
+        parts.push(format!("血+{}", potion.heal_hp));
+    }
+    if potion.heal_mp > 0 {
+        parts.push(format!("蓝+{}", potion.heal_mp));
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(" {}", parts.join(" "))
 }

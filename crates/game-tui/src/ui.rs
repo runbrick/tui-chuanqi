@@ -408,7 +408,7 @@ fn draw_bag(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             String::new()
         };
-        let mut text = format!("{}{rank} ×{}", def.name, stack.count);
+        let mut text = format!("{}{rank}{} ×{}", def.name, item_note(def), stack.count);
         if let Some(delta) = compare_equip(state, &app.data, index) {
             text.push_str(&format_delta(delta.attack_min, delta.attack_max));
         }
@@ -547,7 +547,10 @@ fn draw_shop(frame: &mut Frame, app: &App, area: Rect) {
         for item_id in &shop.stock_ids {
             let def = app.data.item(*item_id);
             let price = (def.price as f64 * f64::from(shop.buy_markup)).ceil() as u32;
-            rows.push((def.quality, format!("{}  {price}金", def.name)));
+            rows.push((
+                def.quality,
+                format!("{}{}  {price}金", def.name, item_note(def)),
+            ));
         }
     }
     let visible = area.height.saturating_sub(5) as usize;
@@ -666,6 +669,34 @@ fn mark(on: bool, text: &str) -> String {
 
 fn format_pair(current: i32, max: i32) -> String {
     format!("{current}/{max}")
+}
+
+/// 技能书标出职业，药水标出回多少血、蓝。装备仍走原来的品质和对比。
+fn item_note(def: &game_data::ItemDef) -> String {
+    match &def.kind {
+        ItemKind::SkillBook(book) => format!(" [{}]", book.req_class.label()),
+        ItemKind::Consumable(potion) => potion_note(potion),
+        _ => String::new(),
+    }
+}
+
+fn potion_note(potion: &game_data::ConsumableDef) -> String {
+    let mut parts = Vec::new();
+    if potion.heal_hp > 0 {
+        parts.push(format!("血+{}", potion.heal_hp));
+    }
+    if potion.heal_mp > 0 {
+        parts.push(format!("蓝+{}", potion.heal_mp));
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    let pace = if potion.instant || potion.duration_ticks == 0 {
+        "立刻"
+    } else {
+        "缓慢"
+    };
+    format!(" {}回{}", pace, parts.join(" "))
 }
 
 fn format_delta(min: i32, max: i32) -> String {
