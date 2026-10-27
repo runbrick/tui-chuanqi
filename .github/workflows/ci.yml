@@ -74,6 +74,7 @@ jobs:
           else
             tar -C dist -czf "dist/${name}.tar.gz" tui-game
           fi
+          rm -rf "$stage"
       - name: installer
         shell: bash
         env:

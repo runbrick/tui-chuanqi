@@ -58,6 +58,7 @@ jobs:
           else
             tar -C dist -czf "dist/${name}.tar.gz" tui-game
           fi
+          rm -rf "$stage"
       - name: installer
         shell: bash
         env:
@@ -90,7 +91,18 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum -- * > SHA256SUMS
+          shopt -s nullglob
+          files=()
+          for path in *; do
+            if [ -f "$path" ]; then
+              files+=("$path")
+            fi
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "dist 里没有可发布的文件"
+            exit 1
+          fi
+          sha256sum -- "${files[@]}" > SHA256SUMS
       - name: publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

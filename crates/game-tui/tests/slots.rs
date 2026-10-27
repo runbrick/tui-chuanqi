@@ -3,7 +3,10 @@ use r_chuanqi::SaveStore;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn data() -> GameData {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data");
@@ -15,7 +18,9 @@ fn temp_store() -> (PathBuf, SaveStore) {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("tui-mir-{nanos}-{}", std::process::id()));
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    // cargo test 同一进程并行跑测试，pid 相同，时钟精度也可能撞在同一纳秒。
+    let root = std::env::temp_dir().join(format!("tui-mir-{nanos}-{seq}-{}", std::process::id()));
     let store = SaveStore::open(&root).unwrap();
     (root, store)
 }
