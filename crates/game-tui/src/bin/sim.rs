@@ -2,7 +2,7 @@
 
 use game_core::GameState;
 use game_data::{Class, GameData, Gender};
-use game_tui::find_data_dir;
+use r_chuanqi::find_data_dir;
 use std::env;
 use std::time::Instant;
 

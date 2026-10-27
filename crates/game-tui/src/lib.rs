@@ -1,6 +1,7 @@
 //! 终端前端、存档和文本工具。规则都在 `game-core`。
 
 pub mod app;
+pub mod install;
 pub mod logfmt;
 pub mod paths;
 pub mod saveio;

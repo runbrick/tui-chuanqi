@@ -5,17 +5,17 @@
 
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// 仓库 `owner/name`。编译期可用 `TUI_GAME_REPO` 覆盖。
 pub const DEFAULT_REPO: &str = match option_env!("TUI_GAME_REPO") {
     Some(repo) => repo,
-    None => "tui-game/tui-game",
+    None => "runbrick/tui-chuanqi",
 };
 
-const USER_AGENT: &str = concat!("tui-game/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("r-chuanqi/", env!("CARGO_PKG_VERSION"));
 const API_HOST: &str = "api.github.com";
 const RELEASE_HOST: &str = "github.com";
 const OBJECT_HOST: &str = "objects.githubusercontent.com";
@@ -88,8 +88,11 @@ pub fn install(release: &Release) -> Result<(), UpdateError> {
     let extracted = staging.join("files");
     std::fs::create_dir_all(&extracted)
         .map_err(|err| UpdateError(format!("建不了解压目录：{err}")))?;
-    extract_archive(&archive_path, &extracted)?;
-    let new_exe = find_binary(&extracted)?;
+    crate::install::extract_archive(&archive_path, &extracted)?;
+    let new_exe = crate::install::find_binary(&extracted)?;
+    if let Some(payload) = new_exe.parent() {
+        crate::install::copy_tree(payload, dir, &new_exe)?;
+    }
     spawn_swap(&exe, &new_exe, &staging)?;
     Ok(())
 }
@@ -168,9 +171,9 @@ fn asset_name(os: &str, arch: &str) -> String {
         _ => "unknown",
     };
     if os == "windows" {
-        format!("tui-game-{target}.zip")
+        format!("r-chuanqi-{target}.zip")
     } else {
-        format!("tui-game-{target}.tar.gz")
+        format!("r-chuanqi-{target}.tar.gz")
     }
 }
 
@@ -425,124 +428,6 @@ fn split_response(raw: &[u8]) -> Result<HttpResponse, UpdateError> {
     })
 }
 
-fn extract_archive(archive: &Path, dest: &Path) -> Result<(), UpdateError> {
-    let name = archive
-        .file_name()
-        .and_then(|item| item.to_str())
-        .unwrap_or("");
-    if name.ends_with(".zip") {
-        extract_zip(archive, dest)
-    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        extract_tar_gz(archive, dest)
-    } else {
-        Err(UpdateError(format!("不认识的安装包：{name}")))
-    }
-}
-
-fn extract_zip(archive: &Path, dest: &Path) -> Result<(), UpdateError> {
-    let file = File::open(archive).map_err(|err| UpdateError(format!("打不开安装包：{err}")))?;
-    let mut zip =
-        zip::ZipArchive::new(file).map_err(|err| UpdateError(format!("安装包损坏：{err}")))?;
-    for index in 0..zip.len() {
-        let mut entry = zip
-            .by_index(index)
-            .map_err(|err| UpdateError(format!("读不了压缩项：{err}")))?;
-        let rel = safe_relative(entry.name())?;
-        let path = dest.join(rel);
-        if entry.is_dir() {
-            std::fs::create_dir_all(&path)
-                .map_err(|err| UpdateError(format!("建不了解压目录：{err}")))?;
-            continue;
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| UpdateError(format!("建不了解压目录：{err}")))?;
-        }
-        let mut output =
-            File::create(&path).map_err(|err| UpdateError(format!("写不了解压文件：{err}")))?;
-        std::io::copy(&mut entry, &mut output)
-            .map_err(|err| UpdateError(format!("解压失败：{err}")))?;
-    }
-    Ok(())
-}
-
-fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<(), UpdateError> {
-    let file = File::open(archive).map_err(|err| UpdateError(format!("打不开安装包：{err}")))?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut tar = tar::Archive::new(decoder);
-    let entries = tar
-        .entries()
-        .map_err(|err| UpdateError(format!("安装包损坏：{err}")))?;
-    for entry in entries {
-        let mut entry = entry.map_err(|err| UpdateError(format!("读不了压缩项：{err}")))?;
-        let rel = entry
-            .path()
-            .map_err(|err| UpdateError(format!("压缩项路径坏了：{err}")))?;
-        let rel = safe_relative(&rel.to_string_lossy())?;
-        let path = dest.join(rel);
-        if entry.header().entry_type().is_dir() {
-            std::fs::create_dir_all(&path)
-                .map_err(|err| UpdateError(format!("建不了解压目录：{err}")))?;
-            continue;
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| UpdateError(format!("建不了解压目录：{err}")))?;
-        }
-        let mut output =
-            File::create(&path).map_err(|err| UpdateError(format!("写不了解压文件：{err}")))?;
-        std::io::copy(&mut entry, &mut output)
-            .map_err(|err| UpdateError(format!("解压失败：{err}")))?;
-    }
-    Ok(())
-}
-
-fn safe_relative(name: &str) -> Result<PathBuf, UpdateError> {
-    let path = Path::new(name);
-    if path.is_absolute() || name.contains(':') {
-        return Err(UpdateError("安装包里有不安全的路径".to_string()));
-    }
-    if path.components().any(|part| {
-        matches!(
-            part,
-            std::path::Component::ParentDir | std::path::Component::RootDir
-        )
-    }) {
-        return Err(UpdateError("安装包里有不安全的路径".to_string()));
-    }
-    Ok(path.to_path_buf())
-}
-
-fn find_binary(root: &Path) -> Result<PathBuf, UpdateError> {
-    let file_name = if cfg!(windows) {
-        "game-tui.exe"
-    } else {
-        "game-tui"
-    };
-    let mut found = Vec::new();
-    collect_named(root, file_name, &mut found)?;
-    found.sort();
-    found
-        .into_iter()
-        .next()
-        .ok_or_else(|| UpdateError(format!("安装包里没有 {file_name}")))
-}
-
-fn collect_named(dir: &Path, name: &str, found: &mut Vec<PathBuf>) -> Result<(), UpdateError> {
-    let entries =
-        std::fs::read_dir(dir).map_err(|err| UpdateError(format!("读不了解压目录：{err}")))?;
-    for entry in entries {
-        let entry = entry.map_err(|err| UpdateError(format!("读不了解压目录：{err}")))?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_named(&path, name, found)?;
-        } else if path.file_name().and_then(|item| item.to_str()) == Some(name) {
-            found.push(path);
-        }
-    }
-    Ok(())
-}
-
 fn spawn_swap(current: &Path, new_exe: &Path, staging: &Path) -> Result<(), UpdateError> {
     if cfg!(windows) {
         let script = staging.join("apply.cmd");
@@ -622,8 +507,8 @@ mod tests {
             r#"{{
                 "tag_name": "v0.2.0",
                 "assets": [
-                    {{"name": "notes.txt", "browser_download_url": "https://github.com/tui-game/tui-game/releases/download/v0.2.0/notes.txt"}},
-                    {{"name": "{name}", "browser_download_url": "https://github.com/tui-game/tui-game/releases/download/v0.2.0/{name}"}}
+                    {{"name": "notes.txt", "browser_download_url": "https://github.com/runbrick/tui-chuanqi/releases/download/v0.2.0/notes.txt"}},
+                    {{"name": "{name}", "browser_download_url": "https://github.com/runbrick/tui-chuanqi/releases/download/v0.2.0/{name}"}}
                 ]
             }}"#
         );

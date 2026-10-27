@@ -6,7 +6,7 @@ resolver = "2"
 edition = "2021"
 license = "MIT"
 rust-version = "1.85"
-authors = ["tui-game"]
+authors = ["r-chuanqi"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +30,7 @@ native-tls = "0.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
+winreg = "0.55"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

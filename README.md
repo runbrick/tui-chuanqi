@@ -1,4 +1,4 @@
-# 热血传奇 TUI 挂机
+# 热血传奇 TUI 挂机（r-chuanqi）
 
 终端里的挂机游戏。职业、怪物、地图和装备来自传奇 1.67，赤月和牛魔这段顶级内容来自 1.76。数值是按成长曲线估的，不是客户端原始表，改 `data/*.ron` 即可，不用改代码。
 
@@ -7,10 +7,12 @@
 需要 Windows Terminal，或者别的支持 Unicode 和真彩色的终端。旧版 `cmd.exe` 里中文宽度和颜色会错。
 
 ```bash
-cargo run -p game-tui
-cargo run -p game-tui --bin sim -- --class warrior --ticks 36000 --seed 42
-cargo run -p game-tui --bin check-content
+cargo run -p r-chuanqi
+cargo run -p r-chuanqi --bin sim -- --class warrior --ticks 36000 --seed 42
+cargo run -p r-chuanqi --bin check-content
 ```
+
+发布包是安装程序，不是解压即用的压缩包。下载 `r-chuanqi-setup` 运行一次：Windows 装到 `%LOCALAPPDATA%\tui-game` 并写入用户 PATH，其它系统装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。关掉终端再开，直接运行 `r-chuanqi`。
 
 `sim` 不画界面，用来看等级、金币和击杀。`--class` 可以是 `warrior`、`mage`、`taoist`。
 
@@ -32,7 +34,7 @@ cargo run -p game-tui --bin check-content
 | F2 | 伪装成时钟，再按一次恢复 |
 | Q | 保存并退出 |
 
-正式版启动后会后台查 GitHub Releases。有更新的版本时底部会提示，按 `U` 下载对应平台的安装包并重启。存档不会被替换。`cargo run` 的调试构建不检查。仓库默认是 `tui-game/tui-game`，编译时可以用 `TUI_GAME_REPO=owner/name` 覆盖。
+正式版启动后会后台查 GitHub Releases。有更新的版本时底部会提示，按 `U` 下载对应平台的安装包并重启。存档不会被替换。`cargo run` 的调试构建不检查。仓库默认是 `runbrick/tui-chuanqi`，编译时可以用 `TUI_GAME_REPO=owner/name` 覆盖。
 
 职业、性别、高风险在创建时选定，之后不能改。高风险掉落更高，死亡会掉一件没锁定的装备。
 

@@ -6,7 +6,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use game_data::GameData;
-use game_tui::{app::App, default_save_root, find_data_dir};
+use r_chuanqi::{app::App, default_save_root, find_data_dir};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{self, stdout};
@@ -23,7 +23,7 @@ fn run() -> Result<(), String> {
         .ok_or("找不到 data 目录。请在仓库根目录运行，或把 data 放在可执行文件旁边。")?;
     let data = GameData::load(&data_dir).map_err(|err| err.to_string())?;
     init_tracing();
-    let store = game_tui::SaveStore::open(default_save_root())?;
+    let store = r_chuanqi::SaveStore::open(default_save_root())?;
     let mut app = App::open(data, store)?;
     app.start_update_check();
     let mut terminal = setup_terminal().map_err(|err| err.to_string())?;

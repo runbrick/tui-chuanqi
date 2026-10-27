@@ -30,7 +30,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: build
-        run: cargo build --release -p game-tui --bin game-tui --target ${{ matrix.target }}
+        run: cargo build --release -p r-chuanqi --bin r-chuanqi --target ${{ matrix.target }}
       - name: pack
         shell: bash
         run: |
@@ -38,21 +38,35 @@ jobs:
           stage="dist/tui-game"
           rm -rf dist
           mkdir -p "$stage"
-          bin="target/${{ matrix.target }}/release/game-tui"
+          bin="target/${{ matrix.target }}/release/r-chuanqi"
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             bin="${bin}.exe"
           fi
           cp "$bin" "$stage/"
           cp -R data "$stage/data"
-          name="tui-game-${{ matrix.target }}"
+          name="r-chuanqi-${{ matrix.target }}"
           if [ "${{ matrix.archive }}" = "zip" ]; then
             (cd dist && tar -a -cf "${name}.zip" tui-game)
           else
             tar -C dist -czf "dist/${name}.tar.gz" tui-game
           fi
+      - name: installer
+        shell: bash
+        env:
+          TUI_GAME_PAYLOAD: dist/r-chuanqi-${{ matrix.target }}.${{ matrix.archive == 'zip' && 'zip' || 'tar.gz' }}
+        run: |
+          set -euo pipefail
+          cargo build --release -p r-chuanqi --bin r-chuanqi-setup --target ${{ matrix.target }}
+          setup="target/${{ matrix.target }}/release/r-chuanqi-setup"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            setup="${setup}.exe"
+            cp "$setup" "dist/r-chuanqi-setup-${{ matrix.target }}.exe"
+          else
+            cp "$setup" "dist/r-chuanqi-setup-${{ matrix.target }}"
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: tui-game-${{ matrix.target }}
+          name: r-chuanqi-${{ matrix.target }}
           path: |
             dist/*.zip
             dist/*.tar.gz
@@ -74,5 +88,5 @@ jobs:
           gh release create "$tag" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "$tag" \
-            --notes "自动构建。Windows 解压后运行 game-tui.exe，其它平台运行 game-tui。存档仍在系统数据目录，不会被这次更新覆盖。" \
+            --notes "下载 r-chuanqi-setup 运行一次。它会装到本机目录，并把 r-chuanqi 加进终端命令。之后在游戏里按 U 更新。存档不会被覆盖。" \
             --verify-tag

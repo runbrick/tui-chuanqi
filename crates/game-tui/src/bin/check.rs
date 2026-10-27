@@ -1,7 +1,7 @@
 //! 内容空洞检查。加载失败直接非 0；空洞只打印警告。
 
 use game_data::{EquipSlot, GameData, ItemKind};
-use game_tui::find_data_dir;
+use r_chuanqi::find_data_dir;
 
 fn main() {
     if let Err(err) = run() {

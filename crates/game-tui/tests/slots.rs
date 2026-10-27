@@ -1,5 +1,5 @@
 use game_data::{Class, GameData, Gender};
-use game_tui::SaveStore;
+use r_chuanqi::SaveStore;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
