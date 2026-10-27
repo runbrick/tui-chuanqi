@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签，例如 v0.2.0。标签必须已经存在。"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -26,6 +32,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -78,14 +86,32 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS
       - name: publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          gh release create "$tag" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$tag" \
-            --notes "下载 r-chuanqi-setup 运行一次。它会装到本机目录，并把 r-chuanqi 加进终端命令。之后在游戏里按 U 更新。存档不会被覆盖。" \
-            --verify-tag
+          tag="$RELEASE_TAG"
+          case "$tag" in
+            v*.*.*) ;;
+            *)
+              echo "标签格式不正确：$tag（需要 vX.Y.Z）"
+              exit 1
+              ;;
+          esac
+          notes="下载 r-chuanqi-setup 运行一次。它会装到本机目录，并把 r-chuanqi 加进终端命令。之后在游戏里按 U 更新。存档不会被覆盖。"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" \
+              --notes "$notes" \
+              --verify-tag
+          fi

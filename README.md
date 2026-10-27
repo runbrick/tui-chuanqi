@@ -14,6 +14,8 @@ cargo run -p r-chuanqi --bin check-content
 
 发布包是安装程序，不是解压即用的压缩包。下载 `r-chuanqi-setup` 运行一次：Windows 装到 `%LOCALAPPDATA%\tui-game` 并写入用户 PATH，其它系统装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。关掉终端再开，直接运行 `r-chuanqi`。
 
+推送 `vX.Y.Z` 标签会跑 `.github/workflows/release.yml`，为 Windows、Linux 和 macOS 打包并发布到 GitHub Releases。标签已经存在时，也可以在 Actions 里手动跑 release，填同一个标签。
+
 `sim` 不画界面，用来看等级、金币和击杀。`--class` 可以是 `warrior`、`mage`、`taoist`。
 
 存档默认在 `%APPDATA%\tui-mir\`（其它系统用 `directories` 的数据目录）。每个角色一个槽位目录，同名可以同时存在。离线收益只结算正在进入的那个角色。
