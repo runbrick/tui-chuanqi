@@ -1,8 +1,8 @@
 //! 把游戏装进用户目录，并让终端能直接运行 `r-chuanqi`。
 //!
-//! Windows 装到 `%LOCALAPPDATA%\tui-game`，把这个目录加进用户 PATH。
-//! 其它系统装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。
-//! 存档不在这里，安装和更新都不会动它。
+//! Windows 装到 `%LOCALAPPDATA%\tui-game`，把这个目录加进用户 PATH，
+//! 再通知系统刷新环境。其它系统装到 `~/.local/share/tui-game`，
+//! 命令放在 `~/.local/bin/r-chuanqi`。存档不在这里，安装、更新和卸载都不动它。
 
 use crate::update::UpdateError;
 use std::path::{Path, PathBuf};
@@ -50,6 +50,17 @@ pub fn install_from(source: &Path) -> Result<InstallReport, UpdateError> {
     make_executable(&installed)?;
     let note = link_command(&dest, &installed)?;
     Ok(InstallReport { dir: dest, note })
+}
+
+/// 从用户 PATH 拿掉命令，并删掉安装目录。存档留下。
+pub fn uninstall() -> Result<InstallReport, UpdateError> {
+    let dir = install_dir()?;
+    let refreshed = unlink_command(&dir)?;
+    let removed_now = remove_install_dir(&dir)?;
+    Ok(InstallReport {
+        dir,
+        note: uninstall_note(removed_now, &refreshed),
+    })
 }
 
 /// 把发布包字节装进去。发布构建才会带上内容。
@@ -248,22 +259,181 @@ fn make_executable(path: &Path) -> Result<(), UpdateError> {
     Ok(())
 }
 
+struct PathUpdate {
+    changed: bool,
+    refreshed: bool,
+}
+
 #[cfg(windows)]
 fn link_command(dir: &Path, _installed: &Path) -> Result<String, UpdateError> {
+    let update = update_user_path(dir, merge_path)?;
+    Ok(command_note(update.refreshed))
+}
+
+#[cfg(not(windows))]
+fn link_command(_dir: &Path, installed: &Path) -> Result<String, UpdateError> {
+    let home = home_dir()?;
+    let bin = home.join(".local").join("bin");
+    std::fs::create_dir_all(&bin).map_err(|err| UpdateError(format!("建不了命令目录：{err}")))?;
+    let link = bin.join("r-chuanqi");
+    replace_link(&link, installed)?;
+    let bin_text = bin.display().to_string();
+    let already = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|entry| entry == bin));
+    if !already {
+        let line = format!("export PATH=\"{bin_text}:$PATH\" {SHELL_MARK}");
+        for name in shell_rc_names() {
+            let path = home.join(name);
+            let existing = std::fs::read_to_string(&path).unwrap_or_default();
+            if let Some(next) = append_shell_line(&existing, &line) {
+                std::fs::write(&path, next)
+                    .map_err(|err| UpdateError(format!("写不了 {name}：{err}")))?;
+            }
+        }
+    }
+    Ok(command_note(true))
+}
+
+fn command_note(refreshed: bool) -> String {
+    let mut note =
+        "已加入用户 PATH。请新开一个终端，运行 r-chuanqi。卸载：r-chuanqi uninstall。存档会留下。"
+            .to_string();
+    if !refreshed {
+        note.push_str(" 这次没能通知系统刷新环境，注销一次后再开终端。");
+    }
+    note
+}
+
+fn uninstall_note(removed_now: bool, update: &PathUpdate) -> String {
+    let save = crate::default_save_root();
+    let mut note = if update.changed {
+        "命令已从 PATH 移除。".to_string()
+    } else {
+        "PATH 里本来就没有这条命令。".to_string()
+    };
+    note.push_str(&format!("存档还在 {}。", save.display()));
+    if removed_now {
+        note.push_str(" 程序文件已删除。");
+    } else {
+        note.push_str(" 关掉这个窗口后，程序文件会删掉。");
+    }
+    if !update.refreshed {
+        note.push_str(" 这次没能通知系统刷新环境，注销一次后命令才会从已打开的终端里消失。");
+    }
+    note
+}
+
+#[cfg(windows)]
+fn unlink_command(dir: &Path) -> Result<PathUpdate, UpdateError> {
+    update_user_path(dir, remove_path)
+}
+
+#[cfg(not(windows))]
+fn unlink_command(dir: &Path) -> Result<PathUpdate, UpdateError> {
+    let home = home_dir()?;
+    let changed = remove_command_link(&home.join(".local").join("bin").join("r-chuanqi"), dir)?;
+    if strip_shell_configs(&home)? {
+        return Ok(PathUpdate {
+            changed: true,
+            refreshed: true,
+        });
+    }
+    Ok(PathUpdate {
+        changed,
+        refreshed: true,
+    })
+}
+
+#[cfg(not(windows))]
+fn home_dir() -> Result<PathBuf, UpdateError> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| UpdateError("找不到用户主目录".to_string()))
+}
+
+#[cfg(not(windows))]
+fn shell_rc_names() -> [&'static str; 5] {
+    [
+        ".profile",
+        ".zprofile",
+        ".bash_profile",
+        ".bashrc",
+        ".zshrc",
+    ]
+}
+
+#[cfg(not(windows))]
+fn replace_link(link: &Path, target: &Path) -> Result<(), UpdateError> {
+    if std::fs::symlink_metadata(link).is_ok() {
+        std::fs::remove_file(link).map_err(|err| UpdateError(format!("换不了命令链接：{err}")))?;
+    }
+    std::os::unix::fs::symlink(target, link)
+        .map_err(|err| UpdateError(format!("建不了命令链接：{err}")))
+}
+
+#[cfg(not(windows))]
+fn remove_command_link(link: &Path, install: &Path) -> Result<bool, UpdateError> {
+    let Ok(meta) = std::fs::symlink_metadata(link) else {
+        return Ok(false);
+    };
+    let owned = if meta.file_type().is_symlink() {
+        match std::fs::read_link(link) {
+            Ok(target) if target.is_absolute() => same_file(&target, &install.join(binary_name())),
+            Ok(target) => link
+                .parent()
+                .is_some_and(|dir| same_file(&dir.join(target), &install.join(binary_name()))),
+            Err(_) => true,
+        }
+    } else {
+        same_file(link, &install.join(binary_name()))
+    };
+    if owned {
+        std::fs::remove_file(link).map_err(|err| UpdateError(format!("删不了命令：{err}")))?;
+    }
+    Ok(owned)
+}
+
+#[cfg(not(windows))]
+fn strip_shell_configs(home: &Path) -> Result<bool, UpdateError> {
+    let mut changed = false;
+    for name in shell_rc_names() {
+        let path = home.join(name);
+        let Ok(existing) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let next = strip_shell_mark(&existing);
+        if next != existing {
+            std::fs::write(&path, next)
+                .map_err(|err| UpdateError(format!("写不了 {name}：{err}")))?;
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+#[cfg(windows)]
+fn update_user_path(
+    dir: &Path,
+    edit: fn(&str, &str) -> (String, bool),
+) -> Result<PathUpdate, UpdateError> {
     use winreg::enums::{RegType, HKEY_CURRENT_USER};
     use winreg::RegKey;
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let (env, _) = root
         .create_subkey("Environment")
         .map_err(|err| UpdateError(format!("打不开用户环境变量：{err}")))?;
-    let (kind, bytes) = match env.get_raw_value("Path") {
-        Ok(value) => (value.vtype, value.bytes),
-        Err(_) => (RegType::REG_EXPAND_SZ, Vec::new()),
+    let current = match env.get_raw_value("Path") {
+        Ok(value) => value,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => winreg::RegValue {
+            vtype: RegType::REG_EXPAND_SZ,
+            bytes: Vec::new(),
+        },
+        Err(err) => return Err(UpdateError(format!("读不了用户 PATH：{err}"))),
     };
-    let current = decode_reg_text(&bytes);
-    let (next, added) = merge_path(&current, &dir.display().to_string());
-    if added {
-        let kind = if kind == RegType::REG_SZ {
+    let text = decode_reg_text(&current.bytes);
+    let (next, changed) = edit(&text, &dir.display().to_string());
+    if changed {
+        let kind = if current.vtype == RegType::REG_SZ {
             RegType::REG_SZ
         } else {
             RegType::REG_EXPAND_SZ
@@ -277,56 +447,153 @@ fn link_command(dir: &Path, _installed: &Path) -> Result<String, UpdateError> {
         )
         .map_err(|err| UpdateError(format!("写不了用户 PATH：{err}")))?;
     }
-    Ok("已安装。关掉并重新打开终端后，运行 r-chuanqi。".to_string())
+    Ok(PathUpdate {
+        changed,
+        refreshed: broadcast_environment(),
+    })
 }
 
-#[cfg(not(windows))]
-fn link_command(_dir: &Path, installed: &Path) -> Result<String, UpdateError> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| UpdateError("找不到用户主目录".to_string()))?;
-    let bin = home.join(".local").join("bin");
-    std::fs::create_dir_all(&bin).map_err(|err| UpdateError(format!("建不了命令目录：{err}")))?;
-    let link = bin.join("r-chuanqi");
-    replace_link(&link, installed)?;
-    let bin_text = bin.display().to_string();
-    let already = std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|entry| entry == bin));
-    if !already {
-        let line = format!("export PATH=\"{bin_text}:$PATH\" {SHELL_MARK}");
-        for name in [
-            ".profile",
-            ".zprofile",
-            ".bash_profile",
-            ".bashrc",
-            ".zshrc",
-        ] {
-            let path = home.join(name);
-            let existing = std::fs::read_to_string(&path).unwrap_or_default();
-            if let Some(next) = append_shell_line(&existing, &line) {
-                std::fs::write(&path, next)
-                    .map_err(|err| UpdateError(format!("写不了 {name}：{err}")))?;
+/// 告诉资源管理器用户环境变了。不发的话，新开的终端还是登录时那份 PATH。
+#[cfg(windows)]
+fn broadcast_environment() -> bool {
+    // 仓库禁止 unsafe。用 PowerShell 代发 WM_SETTINGCHANGE，和安装器自己写注册表是同一条用户权限。
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Add-Type -Namespace Native -Name Env -MemberDefinition '[DllImport(\"user32.dll\", CharSet=CharSet.Unicode, SetLastError=true)] public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint msg, System.UIntPtr wParam, string lParam, uint flags, uint timeout, out System.UIntPtr result);'; $result = [System.UIntPtr]::Zero; $sent = [Native.Env]::SendMessageTimeout([System.IntPtr]0xffff, 0x001A, [System.UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result); if ($sent -eq [System.IntPtr]::Zero) { exit 1 }",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// `true` 表示目录已经不在了。正在运行的程序删不掉自己，等退出后再删。
+fn remove_install_dir(dir: &Path) -> Result<bool, UpdateError> {
+    if !dir.exists() {
+        return Ok(true);
+    }
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(true),
+        Err(_) if exe_is_inside(dir) => {
+            let _ = remove_children_except_self(dir);
+            schedule_delete(dir)?;
+            Ok(false)
+        }
+        Err(err) => Err(UpdateError(format!("删不了安装目录：{err}"))),
+    }
+}
+
+fn exe_is_inside(dir: &Path) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let (Ok(exe), Ok(dir)) = (std::fs::canonicalize(&exe), std::fs::canonicalize(dir)) else {
+        return false;
+    };
+    exe.starts_with(dir)
+}
+
+fn remove_children_except_self(dir: &Path) -> Result<(), UpdateError> {
+    let exe = std::env::current_exe().ok();
+    let entries =
+        std::fs::read_dir(dir).map_err(|err| UpdateError(format!("读不了安装目录：{err}")))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| UpdateError(format!("读不了安装目录：{err}")))?;
+        let path = entry.path();
+        if exe.as_ref().is_some_and(|exe| same_file(&path, exe)) {
+            continue;
+        }
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(err) = result {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                return Err(UpdateError(format!(
+                    "删不了 {}：{err}",
+                    entry.file_name().to_string_lossy()
+                )));
             }
         }
     }
-    Ok("已安装。新开一个终端后，运行 r-chuanqi。".to_string())
+    Ok(())
+}
+
+fn same_file(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn schedule_delete(dir: &Path) -> Result<(), UpdateError> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let script_path =
+        std::env::temp_dir().join(format!("r-chuanqi-uninstall-{}.cmd", std::process::id()));
+    let script = format!(
+        "@echo off\r\nfor /L %%i in (1,1,20) do (\r\n  if not exist \"{dir}\" goto done\r\n  ping 127.0.0.1 -n 2 >nul\r\n  rmdir /s /q \"{dir}\"\r\n)\r\n:done\r\ndel \"%~f0\"\r\n",
+        dir = dir.display()
+    );
+    std::fs::write(&script_path, script)
+        .map_err(|err| UpdateError(format!("写不了清理脚本：{err}")))?;
+    Command::new("cmd")
+        .args([
+            "/D",
+            "/C",
+            "start",
+            "",
+            "/min",
+            "cmd",
+            "/D",
+            "/C",
+            &script_path.display().to_string(),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| UpdateError(format!("排不了退出后删除：{err}")))?;
+    Ok(())
 }
 
 #[cfg(not(windows))]
-fn replace_link(link: &Path, target: &Path) -> Result<(), UpdateError> {
-    if std::fs::symlink_metadata(link).is_ok() {
-        std::fs::remove_file(link).map_err(|err| UpdateError(format!("换不了命令链接：{err}")))?;
-    }
-    std::os::unix::fs::symlink(target, link)
-        .map_err(|err| UpdateError(format!("建不了命令链接：{err}")))
+fn schedule_delete(dir: &Path) -> Result<(), UpdateError> {
+    use std::process::{Command, Stdio};
+    let quoted = shell_quote(&dir.display().to_string());
+    let script = format!(
+        "i=0; while [ \"$i\" -lt 20 ]; do if [ ! -e {quoted} ]; then exit 0; fi; sleep 0.3; rm -rf {quoted}; i=$((i+1)); done"
+    );
+    Command::new("sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| UpdateError(format!("排不了退出后删除：{err}")))?;
+    Ok(())
 }
 
-/// 没有就加到末尾。大小写不同也算同一条。
+#[cfg(not(windows))]
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// 没有就加到末尾。引号、末尾斜杠和大小写不同也算同一条。
 pub fn merge_path(current: &str, dir: &str) -> (String, bool) {
-    let separator = if cfg!(windows) { ';' } else { ':' };
-    let present = current
-        .split(separator)
-        .any(|entry| !entry.is_empty() && entry.trim_matches('"').eq_ignore_ascii_case(dir));
+    let separator = path_separator();
+    let present = current.split(separator).any(|entry| same_dir(entry, dir));
     if present {
         return (current.to_string(), false);
     }
@@ -336,6 +603,46 @@ pub fn merge_path(current: &str, dir: &str) -> (String, bool) {
     } else {
         (format!("{trimmed}{separator}{dir}"), true)
     }
+}
+
+/// 只拿掉安装目录。其它条目原样留下。
+pub fn remove_path(current: &str, dir: &str) -> (String, bool) {
+    let separator = path_separator();
+    let mut kept = Vec::new();
+    let mut removed = false;
+    for entry in current.split(separator) {
+        if entry.is_empty() {
+            continue;
+        }
+        if same_dir(entry, dir) {
+            removed = true;
+        } else {
+            kept.push(entry);
+        }
+    }
+    (kept.join(&separator.to_string()), removed)
+}
+
+fn path_separator() -> char {
+    if cfg!(windows) {
+        ';'
+    } else {
+        ':'
+    }
+}
+
+fn same_dir(entry: &str, dir: &str) -> bool {
+    let left = normalize_dir(entry);
+    let right = normalize_dir(dir);
+    !left.is_empty() && left.eq_ignore_ascii_case(&right)
+}
+
+fn normalize_dir(entry: &str) -> String {
+    entry
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches(['/', '\\'])
+        .to_string()
 }
 
 /// 配置里已经有标记就不动。
@@ -350,6 +657,24 @@ pub fn append_shell_line(existing: &str, line: &str) -> Option<String> {
     next.push_str(line);
     next.push('\n');
     Some(next)
+}
+
+/// 卸掉带标记的那一行。其它行不动。
+pub fn strip_shell_mark(existing: &str) -> String {
+    let mut next = String::new();
+    for line in existing.lines() {
+        if line.contains(SHELL_MARK) {
+            continue;
+        }
+        next.push_str(line);
+        next.push('\n');
+    }
+    if existing.ends_with('\n') || next.is_empty() {
+        next
+    } else {
+        next.pop();
+        next
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -400,11 +725,32 @@ mod tests {
     }
 
     #[test]
+    fn path_entry_is_removed_once() {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let (dir, other) = if cfg!(windows) {
+            (r"C:\Users\a\AppData\Local\tui-game", r"C:\Windows\system32")
+        } else {
+            ("/home/a/.local/share/tui-game", "/usr/bin")
+        };
+        let quoted = format!("\"{dir}\\\"");
+        let current = format!("{other}{sep}{dir}{sep}{quoted}");
+        let (once, removed) = remove_path(&current, dir);
+        assert!(removed);
+        assert_eq!(once, other);
+        let (again, extra) = remove_path(&once, dir);
+        assert!(!extra);
+        assert_eq!(again, once);
+    }
+
+    #[test]
     fn shell_line_is_not_repeated() {
         let line = "export PATH=\"$HOME/.local/bin:$PATH\" # r-chuanqi";
         let once = append_shell_line("export A=1\n", line).unwrap();
         assert!(once.contains(line));
         assert!(append_shell_line(&once, line).is_none());
+        let stripped = strip_shell_mark(&once);
+        assert_eq!(stripped, "export A=1\n");
+        assert!(!stripped.contains(SHELL_MARK));
     }
 
     #[test]

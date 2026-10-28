@@ -19,6 +19,32 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    if let Some(command) = std::env::args().nth(1) {
+        match command.as_str() {
+            "uninstall" | "--uninstall" => return uninstall_game(),
+            "help" | "--help" | "-h" => {
+                print_help();
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+    launch_game()
+}
+
+fn uninstall_game() -> Result<(), String> {
+    let report = r_chuanqi::install::uninstall().map_err(|err| err.to_string())?;
+    println!("{}", report.note);
+    Ok(())
+}
+
+fn print_help() {
+    println!("用法: r-chuanqi [uninstall]");
+    println!("  不带参数    启动游戏");
+    println!("  uninstall   从 PATH 移除命令并删除程序，存档留下");
+}
+
+fn launch_game() -> Result<(), String> {
     let data_dir = find_data_dir()
         .ok_or("找不到 data 目录。请在仓库根目录运行，或把 data 放在可执行文件旁边。")?;
     let data = GameData::load(&data_dir).map_err(|err| err.to_string())?;

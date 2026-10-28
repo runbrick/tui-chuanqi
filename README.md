@@ -12,7 +12,9 @@ cargo run -p r-chuanqi --bin sim -- --class warrior --ticks 36000 --seed 42
 cargo run -p r-chuanqi --bin check-content
 ```
 
-发布包是安装程序，不是解压即用的压缩包。下载 `r-chuanqi-setup` 运行一次：Windows 装到 `%LOCALAPPDATA%\tui-game` 并写入用户 PATH，其它系统装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。关掉终端再开，直接运行 `r-chuanqi`。
+发布包是安装程序，不是解压即用的压缩包。下载 `r-chuanqi-setup` 运行一次：Windows 装到 `%LOCALAPPDATA%\tui-game`，写入用户 PATH 并通知系统刷新；其它系统装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。新开一个终端，直接运行 `r-chuanqi`。已经开着的终端不会变。
+
+卸载运行 `r-chuanqi uninstall`（安装程序也可以加 `uninstall`）。命令会从 PATH 拿掉，程序目录删掉，存档留下。
 
 推送 `vX.Y.Z` 标签会跑 `.github/workflows/release.yml`，为 Windows、Linux 和 macOS 打包并发布到 GitHub Releases。标签已经存在时，也可以在 Actions 里手动跑 release，填同一个标签。
 
