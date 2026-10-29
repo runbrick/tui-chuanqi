@@ -1,8 +1,9 @@
 //! 把游戏装进用户目录，并让终端能直接运行 `r-chuanqi`。
 //!
-//! Windows 装到 `%LOCALAPPDATA%\tui-game`，把这个目录加进用户 PATH，
-//! 再通知系统刷新环境。其它系统装到 `~/.local/share/tui-game`，
-//! 命令放在 `~/.local/bin/r-chuanqi`。存档不在这里，安装、更新和卸载都不动它。
+//! Windows 装到 `%LOCALAPPDATA%\Programs\r-chuanqi`，写入用户 PATH，
+//! 放一个开始菜单快捷方式，并登记到「设置 → 应用」。其它系统装到
+//! `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。
+//! 存档不在这里，安装、更新和卸载都不动它。
 
 use crate::update::UpdateError;
 use std::path::{Path, PathBuf};
@@ -21,13 +22,8 @@ pub struct InstallReport {
 /// 安装根目录。
 pub fn install_dir() -> Result<PathBuf, UpdateError> {
     if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .or_else(|| {
-                directories::BaseDirs::new().map(|dirs| dirs.data_local_dir().to_path_buf())
-            })
-            .map(|dir| dir.join("tui-game"))
-            .ok_or_else(|| UpdateError("找不到本地应用目录".to_string()))
+        // 和 VS Code 等用户级软件一样，放在 Local\Programs 下，而不是随便一个数据夹。
+        local_data_dir().map(|dir| dir.join("Programs").join("r-chuanqi"))
     } else {
         std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -35,6 +31,13 @@ pub fn install_dir() -> Result<PathBuf, UpdateError> {
             .map(|home| home.join(".local").join("share").join("tui-game"))
             .ok_or_else(|| UpdateError("找不到用户主目录".to_string()))
     }
+}
+
+fn local_data_dir() -> Result<PathBuf, UpdateError> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.data_local_dir().to_path_buf()))
+        .ok_or_else(|| UpdateError("找不到本地应用目录".to_string()))
 }
 
 /// 把解压出来的目录装到安装根，并接上终端命令。
@@ -53,18 +56,54 @@ pub fn install_from(source: &Path) -> Result<InstallReport, UpdateError> {
     }
     make_executable(&installed)?;
     let note = link_command(&dest, &installed)?;
+    #[cfg(windows)]
+    {
+        place_start_menu(&dest, &installed)?;
+        register_installed_app(&dest, &installed)?;
+        retire_legacy_install(&dest);
+    }
     Ok(InstallReport { dir: dest, note })
 }
 
 /// 从用户 PATH 拿掉命令，并删掉安装目录。存档留下。
 pub fn uninstall() -> Result<InstallReport, UpdateError> {
     let dir = install_dir()?;
-    let refreshed = unlink_command(&dir)?;
+    let mut refreshed = unlink_command(&dir)?;
+    #[cfg(windows)]
+    {
+        if let Some(legacy) = legacy_install_dir() {
+            if !paths_same(&legacy, &dir) {
+                let extra = unlink_command(&legacy)?;
+                refreshed.changed |= extra.changed;
+                refreshed.refreshed &= extra.refreshed;
+                if legacy.exists() {
+                    let _ = remove_install_dir(&legacy)?;
+                }
+            }
+        }
+        remove_shortcut()?;
+        unregister_installed_app()?;
+    }
     let removed_now = remove_install_dir(&dir)?;
     Ok(InstallReport {
         dir,
         note: uninstall_note(removed_now, &refreshed),
     })
+}
+
+/// 弹出安装或卸载结果。双击安装程序时控制台会马上关掉，必须另外给一个对话框。
+pub fn notify(title: &str, message: &str, error: bool) {
+    #[cfg(windows)]
+    {
+        if !show_message_box(title, message, error) {
+            eprintln!("按回车关闭");
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (title, message, error);
+    }
 }
 
 /// 把发布包字节装进去。发布构建才会带上内容。
@@ -301,9 +340,12 @@ fn link_command(_dir: &Path, installed: &Path) -> Result<String, UpdateError> {
 }
 
 fn command_note(refreshed: bool) -> String {
-    let mut note =
+    let mut note = if cfg!(windows) {
+        "已加入用户 PATH，并放进开始菜单。请新开一个终端，运行 r-chuanqi。也可以从开始菜单打开。卸载：设置 → 应用，或运行 r-chuanqi uninstall。存档会留下。"
+    } else {
         "已加入用户 PATH。请新开一个终端，运行 r-chuanqi。卸载：r-chuanqi uninstall。存档会留下。"
-            .to_string();
+    }
+    .to_string();
     if !refreshed {
         note.push_str(" 这次没能通知系统刷新环境，注销一次后再开终端。");
     }
@@ -322,6 +364,9 @@ fn uninstall_note(removed_now: bool, update: &PathUpdate) -> String {
         note.push_str(" 程序文件已删除。");
     } else {
         note.push_str(" 关掉这个窗口后，程序文件会删掉。");
+    }
+    if cfg!(windows) {
+        note.push_str(" 开始菜单和设置里的入口也已去掉。");
     }
     if !update.refreshed {
         note.push_str(" 这次没能通知系统刷新环境，注销一次后命令才会从已打开的终端里消失。");
@@ -459,6 +504,213 @@ fn update_user_path(
     })
 }
 
+#[cfg(windows)]
+fn show_message_box(title: &str, message: &str, error: bool) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let icon = if error { "Error" } else { "Information" };
+    let script = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.MessageBox]::Show({message}, {title}, 'OK', '{icon}')",
+        message = ps_quote(message),
+        title = ps_quote(title),
+    );
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-EncodedCommand",
+            &utf16_base64(&script),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(windows)]
+fn place_start_menu(dir: &Path, installed: &Path) -> Result<(), UpdateError> {
+    let programs = start_menu_programs()?;
+    std::fs::create_dir_all(&programs)
+        .map_err(|err| UpdateError(format!("建不了开始菜单目录：{err}")))?;
+    let link = programs.join(SHORTCUT_NAME);
+    let script = format!(
+        "$shell = New-Object -ComObject WScript.Shell; $shortcut = $shell.CreateShortcut({link}); $shortcut.TargetPath = {target}; $shortcut.WorkingDirectory = {dir}; $shortcut.Description = {desc}; $shortcut.WindowStyle = 1; $shortcut.Save()",
+        link = ps_quote(&link.display().to_string()),
+        target = ps_quote(&installed.display().to_string()),
+        dir = ps_quote(&dir.display().to_string()),
+        desc = ps_quote("热血传奇 TUI 挂机"),
+    );
+    if !powershell_encoded(&script) {
+        return Err(UpdateError("放不了开始菜单快捷方式".to_string()));
+    }
+    if !link.is_file() {
+        return Err(UpdateError("开始菜单里没有快捷方式".to_string()));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn remove_shortcut() -> Result<(), UpdateError> {
+    let programs = start_menu_programs()?;
+    let link = programs.join(SHORTCUT_NAME);
+    if link.exists() {
+        std::fs::remove_file(&link)
+            .map_err(|err| UpdateError(format!("删不了开始菜单快捷方式：{err}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn start_menu_programs() -> Result<PathBuf, UpdateError> {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.config_dir().to_path_buf()))
+        .map(|dir| {
+            dir.join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+        })
+        .ok_or_else(|| UpdateError("找不到开始菜单目录".to_string()))
+}
+
+#[cfg(windows)]
+fn register_installed_app(dir: &Path, installed: &Path) -> Result<(), UpdateError> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let root = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = root
+        .create_subkey(uninstall_key_path())
+        .map_err(|err| UpdateError(format!("登记不了已安装应用：{err}")))?;
+    let uninstall = format!("\"{}\" uninstall", installed.display());
+    let fields = [
+        ("DisplayName", APP_NAME),
+        ("DisplayVersion", env!("CARGO_PKG_VERSION")),
+        ("Publisher", "r-chuanqi"),
+        ("InstallLocation", &dir.display().to_string()),
+        ("DisplayIcon", &installed.display().to_string()),
+        ("UninstallString", &uninstall),
+        ("QuietUninstallString", &uninstall),
+    ];
+    for (name, value) in fields {
+        key.set_value(name, &value)
+            .map_err(|err| UpdateError(format!("登记不了已安装应用：{err}")))?;
+    }
+    key.set_value("NoModify", &1u32)
+        .map_err(|err| UpdateError(format!("登记不了已安装应用：{err}")))?;
+    key.set_value("NoRepair", &1u32)
+        .map_err(|err| UpdateError(format!("登记不了已安装应用：{err}")))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn unregister_installed_app() -> Result<(), UpdateError> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let root = RegKey::predef(HKEY_CURRENT_USER);
+    match root.delete_subkey(uninstall_key_path()) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(UpdateError(format!("移除不了应用登记：{err}"))),
+    }
+}
+
+#[cfg(windows)]
+fn uninstall_key_path() -> String {
+    format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_ID}")
+}
+
+/// 以前装在 `%LOCALAPPDATA%\tui-game`。新位置装好后把旧目录从 PATH 拿掉，并尽量删掉。
+#[cfg(windows)]
+fn retire_legacy_install(current: &Path) {
+    let Some(legacy) = legacy_install_dir() else {
+        return;
+    };
+    if paths_same(&legacy, current) {
+        return;
+    }
+    let _ = update_user_path(&legacy, remove_path);
+    if legacy.exists() && !exe_is_inside(&legacy) {
+        let _ = std::fs::remove_dir_all(&legacy);
+    }
+}
+
+#[cfg(windows)]
+fn legacy_install_dir() -> Option<PathBuf> {
+    local_data_dir().ok().map(|dir| dir.join("tui-game"))
+}
+
+fn paths_same(left: &Path, right: &Path) -> bool {
+    same_file(left, right)
+        || normalize_dir(&left.display().to_string())
+            .eq_ignore_ascii_case(&normalize_dir(&right.display().to_string()))
+}
+
+#[cfg(windows)]
+fn powershell_encoded(script: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-EncodedCommand",
+            &utf16_base64(script),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// PowerShell `-EncodedCommand` 要的是 UTF-16LE 的 Base64。
+#[cfg(any(windows, test))]
+fn utf16_base64(text: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bytes = Vec::new();
+    for unit in text.encode_utf16() {
+        bytes.extend(unit.to_le_bytes());
+    }
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let a = chunk[0];
+        let b = chunk.get(1).copied().unwrap_or(0);
+        let c = chunk.get(2).copied().unwrap_or(0);
+        out.push(TABLE[(a >> 2) as usize] as char);
+        out.push(TABLE[(((a & 0b11) << 4) | (b >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b & 0b1111) << 2) | (c >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(c & 0b111111) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+#[cfg(any(windows, test))]
+fn ps_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+#[cfg(windows)]
+const APP_ID: &str = "r-chuanqi";
+#[cfg(windows)]
+const APP_NAME: &str = "热血传奇 TUI";
+#[cfg(windows)]
+const SHORTCUT_NAME: &str = "热血传奇 TUI.lnk";
 /// 告诉资源管理器用户环境变了。不发的话，新开的终端还是登录时那份 PATH。
 #[cfg(windows)]
 fn broadcast_environment() -> bool {
@@ -763,6 +1015,13 @@ mod tests {
     fn registry_text_round_trips() {
         let bytes = encode_reg_text(r"%USERPROFILE%\bin;C:\Tools");
         assert_eq!(decode_reg_text(&bytes), r"%USERPROFILE%\bin;C:\Tools");
+    }
+
+    #[test]
+    fn powershell_command_is_utf16_base64() {
+        assert_eq!(utf16_base64("A"), "QQA=");
+        assert_eq!(ps_quote("C:\\a\\b"), "'C:\\a\\b'");
+        assert_eq!(ps_quote("it's"), "'it''s'");
     }
 
     #[test]

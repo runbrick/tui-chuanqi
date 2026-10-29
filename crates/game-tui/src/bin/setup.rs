@@ -14,13 +14,34 @@ fn main() {
     };
     match result {
         Ok(report) => {
-            if !uninstalling {
-                println!("装到 {}", report.dir.display());
-            }
-            println!("{}", report.note);
+            let message = if uninstalling {
+                report.note
+            } else {
+                format!("安装目录：{}\n\n{}", report.dir.display(), report.note)
+            };
+            println!("{message}");
+            r_chuanqi::install::notify(
+                if uninstalling {
+                    "已卸载"
+                } else {
+                    "安装完成"
+                },
+                &message,
+                false,
+            );
         }
         Err(err) => {
-            eprintln!("{err}");
+            let message = err.to_string();
+            eprintln!("{message}");
+            r_chuanqi::install::notify(
+                if uninstalling {
+                    "卸载失败"
+                } else {
+                    "安装失败"
+                },
+                &message,
+                true,
+            );
             std::process::exit(1);
         }
     }

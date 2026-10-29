@@ -117,7 +117,7 @@ jobs:
               exit 1
               ;;
           esac
-          notes="下载 r-chuanqi-setup 运行一次。它会装到本机目录，并把 r-chuanqi 加进终端命令。新开一个终端后运行 r-chuanqi。卸载运行 r-chuanqi uninstall，存档不会被删。之后在游戏里按 U 更新。"
+          notes="下载 r-chuanqi-setup 双击运行。Windows 会弹出安装结果，装到用户的 Programs\\r-chuanqi，并出现在开始菜单和设置的应用列表里。新开一个终端后运行 r-chuanqi，或从开始菜单打开。卸载可在设置里进行，也可运行 r-chuanqi uninstall，存档不会被删。之后在游戏里按 U 更新。"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
           else

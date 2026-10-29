@@ -33,9 +33,18 @@ fn run() -> Result<(), String> {
 }
 
 fn uninstall_game() -> Result<(), String> {
-    let report = r_chuanqi::install::uninstall().map_err(|err| err.to_string())?;
-    println!("{}", report.note);
-    Ok(())
+    match r_chuanqi::install::uninstall() {
+        Ok(report) => {
+            println!("{}", report.note);
+            r_chuanqi::install::notify("已卸载", &report.note, false);
+            Ok(())
+        }
+        Err(err) => {
+            let message = err.to_string();
+            r_chuanqi::install::notify("卸载失败", &message, true);
+            Err(message)
+        }
+    }
 }
 
 fn print_help() {

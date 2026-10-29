@@ -12,7 +12,7 @@ cargo run -p r-chuanqi --bin sim -- --class warrior --ticks 36000 --seed 42
 cargo run -p r-chuanqi --bin check-content
 ```
 
-发布包是安装程序，不是解压即用的压缩包。下载 `r-chuanqi-setup` 运行一次：Windows 装到 `%LOCALAPPDATA%\tui-game`，写入用户 PATH 并通知系统刷新；其它系统装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。新开一个终端，直接运行 `r-chuanqi`。已经开着的终端不会变。
+发布包是安装程序，不是解压即用的压缩包。下载 `r-chuanqi-setup` 双击运行：Windows 会弹出安装结果，装到 `%LOCALAPPDATA%\Programs\r-chuanqi`，写入用户 PATH，并在开始菜单和「设置 → 应用」里留下入口。其它系统装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi`。新开一个终端，直接运行 `r-chuanqi`，或从开始菜单打开。已经开着的终端不会变。
 
 卸载运行 `r-chuanqi uninstall`（安装程序也可以加 `uninstall`）。命令会从 PATH 拿掉，程序目录删掉，存档留下。
 
