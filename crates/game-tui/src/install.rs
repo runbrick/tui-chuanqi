@@ -45,8 +45,12 @@ pub fn install_from(source: &Path) -> Result<InstallReport, UpdateError> {
         .ok_or_else(|| UpdateError("安装包里的程序没有目录".to_string()))?;
     let dest = install_dir()?;
     std::fs::create_dir_all(&dest).map_err(|err| UpdateError(format!("建不了安装目录：{err}")))?;
-    copy_tree(payload, &dest, &new_exe)?;
+    // 首次安装没有正在运行的游戏进程。跳过包里的 exe 会让 PATH 指向一个没有命令的目录。
+    copy_tree(payload, &dest, Path::new(""))?;
     let installed = dest.join(binary_name());
+    if !installed.is_file() {
+        return Err(UpdateError(format!("安装后找不到 {}", binary_name())));
+    }
     make_executable(&installed)?;
     let note = link_command(&dest, &installed)?;
     Ok(InstallReport { dir: dest, note })
@@ -101,7 +105,9 @@ pub(crate) fn copy_tree(source: &Path, dest: &Path, skip: &Path) -> Result<(), U
     for entry in entries {
         let entry = entry.map_err(|err| UpdateError(format!("读不了安装包：{err}")))?;
         let path = entry.path();
-        if path == skip || path.file_name().and_then(|name| name.to_str()) == Some(".update") {
+        if !skip.as_os_str().is_empty() && same_file(&path, skip)
+            || path.file_name().and_then(|name| name.to_str()) == Some(".update")
+        {
             continue;
         }
         let target = dest.join(entry.file_name());
@@ -757,5 +763,30 @@ mod tests {
     fn registry_text_round_trips() {
         let bytes = encode_reg_text(r"%USERPROFILE%\bin;C:\Tools");
         assert_eq!(decode_reg_text(&bytes), r"%USERPROFILE%\bin;C:\Tools");
+    }
+
+    #[test]
+    fn install_copies_the_game_binary() {
+        let root = std::env::temp_dir().join(format!("r-chuanqi-copy-{}", std::process::id()));
+        let source = root.join("src");
+        let dest = root.join("dst");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(source.join("data")).unwrap();
+        let binary = source.join(binary_name());
+        std::fs::write(&binary, b"game").unwrap();
+        std::fs::write(source.join("data").join("maps.ron"), b"[]").unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+
+        copy_tree(&source, &dest, Path::new("")).unwrap();
+        assert_eq!(std::fs::read(dest.join(binary_name())).unwrap(), b"game");
+        assert_eq!(
+            std::fs::read(dest.join("data").join("maps.ron")).unwrap(),
+            b"[]"
+        );
+
+        std::fs::write(&binary, b"next").unwrap();
+        copy_tree(&source, &dest, &binary).unwrap();
+        assert_eq!(std::fs::read(dest.join(binary_name())).unwrap(), b"game");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
