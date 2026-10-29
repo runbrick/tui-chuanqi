@@ -15,7 +15,7 @@ pub const DEFAULT_REPO: &str = match option_env!("TUI_GAME_REPO") {
     None => "runbrick/tui-chuanqi",
 };
 
-const USER_AGENT: &str = concat!("r-chuanqi/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("r-chuanqi/", env!("TUI_GAME_VERSION"));
 const API_HOST: &str = "api.github.com";
 const RELEASE_HOST: &str = "github.com";
 const OBJECT_HOST: &str = "objects.githubusercontent.com";
@@ -46,9 +46,9 @@ impl std::fmt::Display for UpdateError {
 
 impl std::error::Error for UpdateError {}
 
-/// 当前程序版本，来自 `Cargo.toml`。
+/// 当前程序版本。发布构建用 git 标签，不用 `Cargo.toml` 里固定的号。
 pub fn current_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    env!("TUI_GAME_VERSION")
 }
 
 /// 最新 release 是否比当前新。开发构建（debug）不检查，避免每次 `cargo run` 都弹更新。
@@ -425,23 +425,48 @@ fn split_response(raw: &[u8]) -> Result<HttpResponse, UpdateError> {
 }
 
 fn spawn_swap(current: &Path, new_exe: &Path, staging: &Path) -> Result<(), UpdateError> {
+    let pid = std::process::id();
     if cfg!(windows) {
         let script = staging.join("apply.cmd");
-        let body = format!(
+        // 等游戏退出后再换文件。换不成就不重开旧版，避免再次提示更新。
+        // `n` 必须由脚本自己加。写进 format! 的 `%n%` 会被当成占位符。
+        let mut body = format!(
             "@echo off\r\n\
-             ping -n 2 127.0.0.1 >nul\r\n\
+             setlocal\r\n\
+             set /a n=0\r\n\
+             :wait\r\n\
+             tasklist /FI \"PID eq {pid}\" /FO CSV /NH | findstr /C:\"\\\"{pid}\\\"\" >nul\r\n\
+             if errorlevel 1 goto swap\r\n\
+             set /a n+=1\r\n\
+             if "
+        );
+        body.push_str("%n% GEQ 30 goto fail\r\n");
+        body.push_str(&format!(
+            "ping -n 2 127.0.0.1 >nul\r\n\
+             goto wait\r\n\
+             :swap\r\n\
              move /Y \"{}\" \"{}.old\" >nul\r\n\
+             if errorlevel 1 goto fail\r\n\
              move /Y \"{}\" \"{}\" >nul\r\n\
+             if errorlevel 1 goto restore\r\n\
              start \"\" \"{}\"\r\n\
              del /F /Q \"{}.old\" >nul\r\n\
-             exit /b 0\r\n",
+             exit /b 0\r\n\
+             :restore\r\n\
+             move /Y \"{}.old\" \"{}\" >nul\r\n\
+             :fail\r\n\
+             echo 更新没有换上新程序，请关掉游戏后再按一次 U。> \"{}\\update-failed.txt\"\r\n\
+             exit /b 1\r\n",
             current.display(),
             current.display(),
             new_exe.display(),
             current.display(),
             current.display(),
-            current.display()
-        );
+            current.display(),
+            current.display(),
+            current.display(),
+            staging.display()
+        ));
         std::fs::write(&script, body)
             .map_err(|err| UpdateError(format!("写不了更新脚本：{err}")))?;
         Command::new("cmd")
@@ -455,15 +480,29 @@ fn spawn_swap(current: &Path, new_exe: &Path, staging: &Path) -> Result<(), Upda
         let script = staging.join("apply.sh");
         let body = format!(
             "#!/bin/sh\n\
-             sleep 1\n\
-             mv \"{}\" \"{}.old\"\n\
-             mv \"{}\" \"{}\"\n\
+             n=0\n\
+             while kill -0 {pid} 2>/dev/null; do\n\
+               n=$((n + 1))\n\
+               if [ \"$n\" -ge 30 ]; then\n\
+                 echo '更新没有换上新程序，请关掉游戏后再按一次 U。' > \"{}\"/update-failed.txt\n\
+                 exit 1\n\
+               fi\n\
+               sleep 1\n\
+             done\n\
+             mv \"{}\" \"{}.old\" || exit 1\n\
+             if ! mv \"{}\" \"{}\"; then\n\
+               mv \"{}.old\" \"{}\"\n\
+               exit 1\n\
+             fi\n\
              chmod +x \"{}\"\n\
              \"{}\" >/dev/null 2>&1 &\n\
              rm -f \"{}.old\"\n",
+            staging.display(),
             current.display(),
             current.display(),
             new_exe.display(),
+            current.display(),
+            current.display(),
             current.display(),
             current.display(),
             current.display(),
@@ -494,6 +533,7 @@ mod tests {
         assert!(!version_is_newer("v0.1.0", "0.2.0"));
         assert!(version_is_newer("1.0.0", "1.0.0-beta.1"));
         assert!(!version_is_newer("not-a-version", "0.1.0"));
+        assert!(parse_version(current_version()).is_some());
     }
 
     #[test]

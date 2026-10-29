@@ -684,25 +684,29 @@ fn set_thresholds(
 ) -> Result<(), CoreError> {
     let hp = hp.clamp(0.05, 0.95);
     let mp = mp.clamp(0.05, 0.95);
-    if state.level < data.balance.auto_coarse_level {
-        let fixed_hp = data.balance.potion_hp_ratio;
-        let fixed_mp = data.balance.potion_mp_ratio;
-        if (hp - fixed_hp).abs() > 0.02 || (mp - fixed_mp).abs() > 0.02 {
-            return Err(CoreError::ThresholdLocked);
+    let changed = (hp - state.automation.hp_ratio).abs() > 0.001
+        || (mp - state.automation.mp_ratio).abs() > 0.001;
+    if changed {
+        if state.level < data.balance.auto_coarse_level {
+            let fixed_hp = data.balance.potion_hp_ratio;
+            let fixed_mp = data.balance.potion_mp_ratio;
+            if (hp - fixed_hp).abs() > 0.02 || (mp - fixed_mp).abs() > 0.02 {
+                return Err(CoreError::ThresholdLocked);
+            }
+        } else if state.level < data.balance.auto_fine_level {
+            let coarse = |v: f64| {
+                [0.25, 0.5, 0.75]
+                    .into_iter()
+                    .any(|step| (v - step).abs() < 0.02)
+            };
+            if !coarse(hp) || !coarse(mp) {
+                return Err(CoreError::ThresholdLocked);
+            }
         }
-    } else if state.level < data.balance.auto_fine_level {
-        let coarse = |v: f64| {
-            [0.25, 0.5, 0.75]
-                .into_iter()
-                .any(|step| (v - step).abs() < 0.02)
-        };
-        if !coarse(hp) || !coarse(mp) {
-            return Err(CoreError::ThresholdLocked);
-        }
+        state.automation.hp_ratio = hp;
+        state.automation.mp_ratio = mp;
     }
     state.automation.auto_potion = auto;
-    state.automation.hp_ratio = hp;
-    state.automation.mp_ratio = mp;
     Ok(())
 }
 

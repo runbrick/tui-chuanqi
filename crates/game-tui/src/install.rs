@@ -589,7 +589,7 @@ fn register_installed_app(dir: &Path, installed: &Path) -> Result<(), UpdateErro
     let uninstall = format!("\"{}\" uninstall", installed.display());
     let fields = [
         ("DisplayName", APP_NAME),
-        ("DisplayVersion", env!("CARGO_PKG_VERSION")),
+        ("DisplayVersion", env!("TUI_GAME_VERSION")),
         ("Publisher", "r-chuanqi"),
         ("InstallLocation", &dir.display().to_string()),
         ("DisplayIcon", &installed.display().to_string()),

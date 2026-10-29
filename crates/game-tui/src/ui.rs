@@ -224,6 +224,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("6 统计    击杀、金币、每小时经验"),
         Line::from(""),
         Line::from("X 卖掉未锁定的白装    R 修理    F 把药补到 20 瓶"),
+        Line::from("P 开关自动吃药   [ ] 调剩多少血喝   - = 调剩多少蓝喝"),
         Line::from("U 武器升级，先看成功率，再按一次才执行（有新版本时，U 改为下载并重启）"),
         Line::from("F2 伪装成时钟，再按一次恢复"),
         Line::from("Q 保存并退出"),
@@ -244,7 +245,7 @@ fn draw_play(frame: &mut Frame, app: &App, area: Rect) {
         .split(rows[0]);
     let left = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(14), Constraint::Min(6)])
+        .constraints([Constraint::Length(15), Constraint::Min(6)])
         .split(cols[0]);
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -320,6 +321,11 @@ fn draw_character(frame: &mut Frame, app: &App, area: Rect) {
             "经验 {} {:.0}%",
             bar((exp_ratio * 10.0) as i32, 10, 16),
             exp_ratio * 100.0
+        )),
+        Line::from(format!(
+            "吃药剩血 {}  剩蓝 {}",
+            potion_left(derived.max_hp, state.automation.hp_ratio),
+            potion_left(derived.max_mp, state.automation.mp_ratio)
         )),
         Line::from(Span::styled(
             if hp_ratio < 0.3 { "血量危险" } else { "" },
@@ -607,6 +613,7 @@ fn draw_stats(frame: &mut Frame, app: &App, area: Rect) {
         return;
     };
     let hours = state.tick_count as f64 / 36000.0;
+    let derived = state.derived_stats(&app.data);
     let per_hour = if hours < 0.01 {
         0.0
     } else {
@@ -626,14 +633,16 @@ fn draw_stats(frame: &mut Frame, app: &App, area: Rect) {
             hours, per_hour
         )),
         Line::from(format!(
-            "喝药 {}  阈值 {:.0}%/{:.0}%  自动换图 {}",
+            "喝药 {}  低于血 {:.0}%（剩 {}） 低于蓝 {:.0}%（剩 {}）  自动换图 {}",
             if state.automation.auto_potion {
                 "开"
             } else {
                 "关"
             },
             state.automation.hp_ratio * 100.0,
+            potion_left(derived.max_hp, state.automation.hp_ratio),
             state.automation.mp_ratio * 100.0,
+            potion_left(derived.max_mp, state.automation.mp_ratio),
             if state.automation.auto_advance {
                 "开"
             } else {
@@ -700,6 +709,11 @@ fn mark(on: bool, text: &str) -> String {
 
 fn format_pair(current: i32, max: i32) -> String {
     format!("{current}/{max}")
+}
+
+/// 低于这条线就吃药，换算成当前上限下的剩余点数。
+fn potion_left(max: i32, ratio: f64) -> i32 {
+    (ratio.clamp(0.0, 1.0) * f64::from(max.max(0))).round() as i32
 }
 
 /// 技能书标出职业，药水标出回多少血、蓝。装备仍走原来的品质和对比。

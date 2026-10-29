@@ -596,6 +596,11 @@ impl App {
             KeyCode::Char('r') => self.town_service(Command::Repair),
             KeyCode::Char('f') => self.town_service(Command::Restock { hp: 20, mp: 20 }),
             KeyCode::Char('a') => self.toggle_advance(),
+            KeyCode::Char('p') => self.toggle_potion(),
+            KeyCode::Char('[') => self.nudge_potion(true, -1),
+            KeyCode::Char(']') => self.nudge_potion(true, 1),
+            KeyCode::Char('-') => self.nudge_potion(false, -1),
+            KeyCode::Char('=') => self.nudge_potion(false, 1),
             KeyCode::Char('u') => self.upgrade(),
             KeyCode::Char('+') => self.buy(10),
             _ => {}
@@ -746,6 +751,79 @@ impl App {
             .as_ref()
             .is_some_and(|state| !state.automation.auto_advance);
         self.command(Command::SetAutoAdvance { enabled });
+    }
+
+    fn toggle_potion(&mut self) {
+        let Some((auto, hp, mp)) = self.state.as_ref().map(|state| {
+            (
+                !state.automation.auto_potion,
+                state.automation.hp_ratio,
+                state.automation.mp_ratio,
+            )
+        }) else {
+            return;
+        };
+        self.command(Command::SetThresholds { auto, hp, mp });
+        if self.message.is_empty() {
+            self.note(if auto {
+                "自动吃药已开".to_string()
+            } else {
+                "自动吃药已关".to_string()
+            });
+        }
+    }
+
+    /// 调低或调高吃药线。血量低于这条线才喝。
+    fn nudge_potion(&mut self, hp_bar: bool, delta: i32) {
+        let Some((level, hp_ratio, mp_ratio)) = self.state.as_ref().map(|state| {
+            (
+                state.level,
+                state.automation.hp_ratio,
+                state.automation.mp_ratio,
+            )
+        }) else {
+            return;
+        };
+        if level < self.data.balance.auto_coarse_level {
+            self.note(format!(
+                "{} 级才能调吃药线，现在用默认的 {:.0}%/{:.0}%",
+                self.data.balance.auto_coarse_level,
+                self.data.balance.potion_hp_ratio * 100.0,
+                self.data.balance.potion_mp_ratio * 100.0
+            ));
+            return;
+        }
+        let fine = level >= self.data.balance.auto_fine_level;
+        let mut hp = hp_ratio;
+        let mut mp = mp_ratio;
+        if fine {
+            if hp_bar {
+                hp = step_percent(hp, delta);
+            } else {
+                mp = step_percent(mp, delta);
+            }
+        } else {
+            hp = snap_step(hp, &[0.25, 0.5, 0.75], if hp_bar { delta } else { 0 });
+            mp = snap_step(mp, &[0.25, 0.5, 0.75], if hp_bar { 0 } else { delta });
+        }
+        self.command(Command::SetThresholds { auto: true, hp, mp });
+        if self.message.is_empty() {
+            let Some(state) = self.state.as_ref() else {
+                return;
+            };
+            let derived = state.derived_stats(&self.data);
+            let (label, ratio, max) = if hp_bar {
+                ("血", hp, derived.max_hp)
+            } else {
+                ("蓝", mp, derived.max_mp)
+            };
+            let left = (ratio * f64::from(max)).round() as i32;
+            self.note(format!(
+                "{label}低于 {left}（{:.0}%）时吃药。另一边是 {:.0}%",
+                ratio * 100.0,
+                if hp_bar { mp } else { hp } * 100.0
+            ));
+        }
     }
 
     fn lock_selected(&mut self) {
@@ -1024,6 +1102,24 @@ impl App {
             self.characters = self.store.list().unwrap_or_default();
         }
     }
+}
+
+/// 精调一档是 5%。夹在 5% 和 95% 之间。
+fn step_percent(current: f64, delta: i32) -> f64 {
+    let step = (current * 20.0).round() as i32 + delta;
+    (step.clamp(1, 19) as f64) / 20.0
+}
+
+/// 粗调只落在给定档位上。不在档上的旧值先贴到最近的一档。
+fn snap_step(current: f64, steps: &[f64], delta: i32) -> f64 {
+    let mut best = 0;
+    for (index, step) in steps.iter().enumerate() {
+        if (current - step).abs() < (current - steps[best]).abs() {
+            best = index;
+        }
+    }
+    let next = best as i32 + delta.signum();
+    steps[next.clamp(0, steps.len() as i32 - 1) as usize]
 }
 
 fn format_report(report: &game_core::OfflineReport, data: &GameData) -> String {
