@@ -1,6 +1,6 @@
 //! 面板绘制。战斗日志一直留在下面。
 
-use crate::app::{App, CreateForm, DeleteForm, Panel, Screen, SellForm};
+use crate::app::{App, BuyForm, CreateForm, DeleteForm, Panel, Screen, SellForm};
 use crate::theme;
 use crate::util::{bar, pad_to};
 use game_core::{compare_equip, CoreError};
@@ -37,6 +37,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Create(form) => draw_create(frame, form, area),
         Screen::Delete(form) => draw_delete(frame, app, form, area),
         Screen::Sell(form) => draw_sell(frame, app, form, area),
+        Screen::Buy(form) => draw_buy(frame, app, form, area),
         Screen::Report(text) => draw_report(frame, text, area),
         Screen::Help(_) => draw_help(frame, area),
         Screen::Play => draw_play(frame, app, area),
@@ -206,6 +207,62 @@ fn draw_sell(frame: &mut Frame, app: &App, form: &SellForm, area: Rect) {
     frame.render_widget(panel("确认出售", lines), area);
 }
 
+fn draw_buy(frame: &mut Frame, app: &App, form: &BuyForm, area: Rect) {
+    let offer = buy_offer(app, form.npc, form.stock_index);
+    let typed = if form.digits.is_empty() {
+        "_".to_string()
+    } else {
+        form.digits.clone()
+    };
+    let count = form.digits.parse::<u32>().unwrap_or(0);
+    let (title, lines) = match offer {
+        Some((name, unit, note)) => {
+            let cost = unit.saturating_mul(u64::from(count));
+            let gold = app.state.as_ref().map(|state| state.gold).unwrap_or(0);
+            (
+                "购买详情",
+                vec![
+                    Line::from(format!("购买 {name}{note}")),
+                    Line::from(format!("单价 {unit} 金币，身上有 {gold} 金币。")),
+                    Line::from("输入数量后按 Enter 确认。Esc 取消。"),
+                    Line::from(format!("数量：{typed}")),
+                    Line::from(format!("共需 {cost} 金币")),
+                    Line::from(Span::styled(form.error.clone(), theme::death())),
+                ],
+            )
+        }
+        None => (
+            "购买详情",
+            vec![
+                Line::from("这件东西已经不卖了。"),
+                Line::from("Esc 返回。"),
+                Line::from(Span::styled(form.error.clone(), theme::death())),
+            ],
+        ),
+    };
+    frame.render_widget(panel(title, lines), area);
+}
+
+fn buy_offer(app: &App, npc: usize, stock_index: usize) -> Option<(String, u64, String)> {
+    let shop = app
+        .data
+        .npcs
+        .get(npc)?
+        .services
+        .iter()
+        .find_map(|service| {
+            if let game_data::NpcService::Shop(shop) = service {
+                Some(shop)
+            } else {
+                None
+            }
+        })?;
+    let item = *shop.stock_ids.get(stock_index)?;
+    let def = app.data.item(item);
+    let unit = (f64::from(def.price) * f64::from(shop.buy_markup)).ceil() as u64;
+    Some((def.name.clone(), unit, item_note(def)))
+}
+
 fn draw_report(frame: &mut Frame, text: &str, area: Rect) {
     let mut lines: Vec<Line> = text.lines().map(Line::from).collect();
     lines.push(Line::from("Enter 继续。"));
@@ -220,7 +277,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("2 背包    ↑↓ 选择，S 出售（先填数量），L 锁定"),
         Line::from("3 技能    Enter 开关自动施放"),
         Line::from("4 地图    Enter 进入，A 开关自动换图"),
-        Line::from("5 商店    只在比奇城。←→ 换店铺，Enter 买 1 个，+ 买 10 个"),
+        Line::from("5 商店    只在比奇城。←→ 换店铺，Enter 进入购买详情后填数量"),
         Line::from("6 统计    击杀、金币、每小时经验"),
         Line::from(""),
         Line::from("X 卖掉未锁定的白装    R 修理    F 把药补到 20 瓶"),
@@ -595,7 +652,7 @@ fn draw_shop(frame: &mut Frame, app: &App, area: Rect) {
     let range = page_of(selected, rows.len(), visible);
     let mut lines = vec![
         Line::from(tabs),
-        Line::from(format!("{greeting}  ←→ 换店，Enter 买 1，+ 买 10")),
+        Line::from(format!("{greeting}  ←→ 换店，Enter 进入购买详情")),
     ];
     for (index, (quality, text)) in rows.iter().enumerate().skip(range.start).take(range.len()) {
         let style = if index == selected {

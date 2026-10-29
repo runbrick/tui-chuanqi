@@ -42,6 +42,8 @@ pub enum Screen {
     Delete(DeleteForm),
     /// 出售确认。战斗仍在暂停，填数量后才卖掉。
     Sell(SellForm),
+    /// 购买详情。选中商品后填数量，回车才买下。
+    Buy(BuyForm),
     /// 离线报告。
     Report(String),
     /// 游戏中。
@@ -78,6 +80,18 @@ pub struct DeleteForm {
 pub struct SellForm {
     /// 背包下标。确认期间不能换选中。
     pub index: usize,
+    /// 已输入的数量，空着表示还没填。
+    pub digits: String,
+    /// 校验错误。
+    pub error: String,
+}
+
+/// 购买详情。数量是玩家正在输入的数字。
+pub struct BuyForm {
+    /// NPC 下标。确认期间不能换店铺。
+    pub npc: usize,
+    /// 货架下标。
+    pub stock_index: usize,
     /// 已输入的数量，空着表示还没填。
     pub digits: String,
     /// 校验错误。
@@ -287,6 +301,7 @@ impl App {
             Screen::Create(_) => self.key_create(key),
             Screen::Delete(_) => self.key_delete(key),
             Screen::Sell(_) => self.key_sell(key),
+            Screen::Buy(_) => self.key_buy(key),
             Screen::Report(_) => {
                 if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
                     self.screen = Screen::Play;
@@ -372,7 +387,7 @@ impl App {
     fn typing_name(&self) -> bool {
         match &self.screen {
             Screen::Create(form) => form.step == 2,
-            Screen::Delete(_) | Screen::Sell(_) => true,
+            Screen::Delete(_) | Screen::Sell(_) | Screen::Buy(_) => true,
             _ => false,
         }
     }
@@ -602,7 +617,6 @@ impl App {
             KeyCode::Char('-') => self.nudge_potion(false, -1),
             KeyCode::Char('=') => self.nudge_potion(false, 1),
             KeyCode::Char('u') => self.upgrade(),
-            KeyCode::Char('+') => self.buy(10),
             _ => {}
         }
     }
@@ -683,21 +697,78 @@ impl App {
                     }
                 }
             }
-            Panel::Shop => self.buy(1),
+            Panel::Shop => self.open_buy(),
             _ => {}
         }
     }
 
-    fn buy(&mut self, count: u32) {
+    /// 打开购买详情。数量在这里填，回车才买下。
+    fn open_buy(&mut self) {
         if !self.in_town() {
             self.panel = Panel::Combat;
             self.note("商店只在比奇城。先回城。");
             return;
         }
         let Some((npc, stock_index)) = self.selected_shop() else {
+            self.note("这家没有在卖的东西。");
             return;
         };
+        self.screen = Screen::Buy(BuyForm {
+            npc,
+            stock_index,
+            digits: "1".to_string(),
+            error: String::new(),
+        });
+    }
+
+    fn key_buy(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.screen = Screen::Play,
+            KeyCode::Char(ch)
+                if ch.is_ascii_digit() && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if let Screen::Buy(form) = &mut self.screen {
+                    if form.digits.len() < 6 {
+                        form.digits.push(ch);
+                        form.error.clear();
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Screen::Buy(form) = &mut self.screen {
+                    form.digits.pop();
+                    form.error.clear();
+                }
+            }
+            KeyCode::Enter => self.finish_buy(),
+            _ => {}
+        }
+    }
+
+    fn finish_buy(&mut self) {
+        let Screen::Buy(form) = &self.screen else {
+            return;
+        };
+        let npc = form.npc;
+        let stock_index = form.stock_index;
+        let digits = form.digits.clone();
+        let count: u32 = match digits.parse() {
+            Ok(count) if count > 0 => count,
+            _ => {
+                if let Screen::Buy(form) = &mut self.screen {
+                    form.error = "请输入大于 0 的数量".to_string();
+                }
+                return;
+            }
+        };
+        if !self.in_town() {
+            self.screen = Screen::Play;
+            self.panel = Panel::Combat;
+            self.note("商店只在比奇城。先回城。");
+            return;
+        }
         let notice = self.purchase_notice(npc, stock_index, count);
+        self.screen = Screen::Play;
         self.command(Command::Buy {
             npc,
             stock_index,
