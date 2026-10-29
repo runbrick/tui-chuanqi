@@ -97,3 +97,13 @@ pub fn title() -> Style {
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD)
 }
+
+/// 次要文字：按键提示、用不了的物品、未解锁的地图。
+pub fn dim() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
+
+/// 自己掉血、钱不够这类不致命的坏消息。比死亡淡一些。
+pub fn hurt() -> Style {
+    Style::default().fg(Color::LightRed)
+}

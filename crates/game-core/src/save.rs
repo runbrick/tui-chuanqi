@@ -96,6 +96,12 @@ pub struct SavedGame {
     pub achievements: BTreeSet<String>,
     /// 下次刷怪。
     pub next_spawn_at: u64,
+    /// 休息完要回的地图 slug。旧档没有这个字段。
+    #[serde(default)]
+    pub return_map: Option<String>,
+    /// 连续死亡次数。
+    #[serde(default)]
+    pub death_streak: u8,
     /// PCG64 的 RON 文本。JSON 数字装不下内部 128 位状态。
     pub rng: String,
 }
@@ -290,6 +296,8 @@ pub fn export_state(state: &GameState, data: &GameData) -> SavedGame {
             .map(|id| format!("{id:?}"))
             .collect(),
         next_spawn_at: state.next_spawn_at,
+        return_map: state.return_map.map(|id| data.map(id).id.clone()),
+        death_streak: state.death_streak,
         rng: hex_encode(&bincode::serialize(&state.rng).unwrap_or_default()),
     }
 }
@@ -469,6 +477,11 @@ pub(crate) fn import_owned(saved: SavedGame, data: &GameData) -> Result<GameStat
         automation: saved.automation,
         achievements,
         next_spawn_at: saved.next_spawn_at,
+        return_map: saved
+            .return_map
+            .as_deref()
+            .and_then(|slug| data.map_id(slug)),
+        death_streak: saved.death_streak,
         rng: bincode::deserialize(&hex_decode(&saved.rng)?)
             .map_err(|err| format!("RNG 无法恢复：{err}"))?,
         derived: std::cell::OnceCell::new(),

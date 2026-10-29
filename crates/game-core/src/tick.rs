@@ -1,19 +1,28 @@
 //! 固定顺序的逻辑 tick。改顺序会影响快照和存档复现，不要随意调整。
 
 use crate::event::GameEvent;
-use crate::state::{ms_to_ticks, Achievement, Combat, EventSink, GameState, Pet};
+use crate::state::{ms_to_ticks, skill_rank, Achievement, Combat, EventSink, GameState, Pet};
 use game_data::{
-    DamageSource, GameData, ItemId, ItemKind, MapId, MonsterId, Quality, Range, SkillEffect,
-    SkillId,
+    DamageSource, GameData, ItemId, ItemKind, MapId, MonsterDef, MonsterId, Quality, Range,
+    SkillEffect, SkillId,
 };
 use rand::Rng;
+use std::collections::BTreeMap;
+
+/// 持续伤害每隔这么多 tick 跳一次。
+const DOT_PULSE: u32 = 10;
 
 pub(crate) fn step(state: &mut GameState, data: &GameData, sink: &mut impl EventSink) {
     apply_dots(state, data, sink);
+    if monster_down(state) {
+        finish_kill(state, data, sink);
+    }
     let resting = state.tick_count < state.resting_until;
     if resting {
         recover_rest(state, data);
     } else {
+        regen(state, data);
+        return_to_hunt(state, data, sink);
         auto_potions(state, data, sink);
         if should_retreat(state, data) {
             retreat(state, data, sink);
@@ -21,16 +30,16 @@ pub(crate) fn step(state: &mut GameState, data: &GameData, sink: &mut impl Event
             if state.combat.is_none() {
                 try_spawn(state, data, sink);
             }
-            if state.combat.is_some() {
+            if monster_alive(state) {
                 player_act(state, data, sink);
             }
-            if state.combat.is_some() {
+            if monster_alive(state) {
                 pet_act(state, data, sink);
             }
-            if state.combat.is_some() {
+            if monster_alive(state) {
                 monster_act(state, data, sink);
             }
-            if state.combat.as_ref().is_some_and(|combat| combat.hp <= 0) {
+            if monster_down(state) {
                 finish_kill(state, data, sink);
             }
         }
@@ -41,6 +50,14 @@ pub(crate) fn step(state: &mut GameState, data: &GameData, sink: &mut impl Event
     }
     check_achievements(state, sink);
     state.tick_count = state.tick_count.saturating_add(1);
+}
+
+fn monster_alive(state: &GameState) -> bool {
+    state.combat.as_ref().is_some_and(|combat| combat.hp > 0)
+}
+
+fn monster_down(state: &GameState) -> bool {
+    state.combat.as_ref().is_some_and(|combat| combat.hp <= 0)
 }
 
 fn apply_dots(state: &mut GameState, data: &GameData, sink: &mut impl EventSink) {
@@ -73,13 +90,14 @@ fn apply_dots(state: &mut GameState, data: &GameData, sink: &mut impl EventSink)
             }
         }
         if combat.poison_left > 0 && combat.poison_dps > 0 && combat.hp > 0 {
-            combat.hp -= combat.poison_dps;
             combat.poison_left -= 1;
-            sink.push_event(GameEvent::Attacked {
-                target: combat.monster,
-                damage: combat.poison_dps,
-                crit: false,
-            });
+            if combat.poison_left % DOT_PULSE == 0 {
+                combat.hp -= combat.poison_dps;
+                sink.push_event(GameEvent::DotDamage {
+                    target: combat.monster,
+                    damage: combat.poison_dps,
+                });
+            }
         }
     }
 }
@@ -92,19 +110,56 @@ fn recover_rest(state: &mut GameState, data: &GameData) {
     state.mp = (state.mp + (max_mp / 40).max(1)).min(max_mp);
 }
 
+/// 平时的缓慢回复。休息时有 `recover_rest`，这里不叠加。
+fn regen(state: &mut GameState, data: &GameData) {
+    let cfg = &data.balance.regen;
+    if cfg.interval_ms == 0 || state.tick_count % ms_to_ticks(cfg.interval_ms) != 0 {
+        return;
+    }
+    let derived = *state.derived_stats(data);
+    let amount = |max: i32, ratio: f64| ((f64::from(max) * ratio).round() as i32).max(1);
+    if cfg.hp_ratio > 0.0 && state.hp > 0 && state.hp < derived.max_hp {
+        state.hp = (state.hp + amount(derived.max_hp, cfg.hp_ratio)).min(derived.max_hp);
+    }
+    if cfg.mp_ratio > 0.0 && state.mp < derived.max_mp {
+        state.mp = (state.mp + amount(derived.max_mp, cfg.mp_ratio)).min(derived.max_mp);
+    }
+}
+
+/// 死亡或没药回城后，休息完回到原来的图。图被锁了（比如等级掉了）就留在城里。
+fn return_to_hunt(state: &mut GameState, data: &GameData, sink: &mut impl EventSink) {
+    let Some(map) = state.return_map else {
+        return;
+    };
+    if !data.map(state.current_map).safe_zone {
+        state.return_map = None;
+        return;
+    }
+    state.return_map = None;
+    if !crate::command::map_unlocked(state, data, map) {
+        return;
+    }
+    state.current_map = map;
+    state.next_spawn_at = state.tick_count;
+    sink.push_event(GameEvent::ReturnedToHunt { map });
+}
+
 fn auto_potions(state: &mut GameState, data: &GameData, sink: &mut impl EventSink) {
     if !state.automation.auto_potion {
         return;
     }
+    // 慢回的药还没回完就不再喝，否则一口气连灌好几瓶。
     let derived = *state.derived_stats(data);
     if derived.max_hp > 0
-        && f64::from(state.hp) / f64::from(derived.max_hp) < state.automation.hp_ratio
+        && f64::from(state.hp + state.hot_hp) / f64::from(derived.max_hp)
+            < state.automation.hp_ratio
     {
         drink(state, data, sink, true);
     }
     let derived = *state.derived_stats(data);
     if derived.max_mp > 0
-        && f64::from(state.mp) / f64::from(derived.max_mp) < state.automation.mp_ratio
+        && f64::from(state.mp + state.hot_mp) / f64::from(derived.max_mp)
+            < state.automation.mp_ratio
     {
         drink(state, data, sink, false);
     }
@@ -113,14 +168,16 @@ fn auto_potions(state: &mut GameState, data: &GameData, sink: &mut impl EventSin
 fn drink(state: &mut GameState, data: &GameData, sink: &mut impl EventSink, hp: bool) {
     let derived = *state.derived_stats(data);
     let missing = if hp {
-        derived.max_hp - state.hp
+        derived.max_hp - state.hp - state.hot_hp
     } else {
-        derived.max_mp - state.mp
+        derived.max_mp - state.mp - state.hot_mp
     };
     if missing <= 0 {
         return;
     }
-    let mut best: Option<(usize, i32)> = None;
+    // 取能补上缺口的最小规格；都不够就取最大的。
+    let mut covers: Option<(usize, i32)> = None;
+    let mut largest: Option<(usize, i32)> = None;
     for (index, stack) in state.inventory.iter().enumerate() {
         let ItemKind::Consumable(potion) = &data.item(stack.item).kind else {
             continue;
@@ -129,39 +186,14 @@ fn drink(state: &mut GameState, data: &GameData, sink: &mut impl EventSink, hp: 
         if amount <= 0 {
             continue;
         }
-        let better = match best {
-            None => true,
-            Some((_, current)) => {
-                (amount >= missing && current < missing)
-                    || (amount < current && current > missing)
-                    || (amount < current && amount >= missing)
-            }
-        };
-        if better || best.is_none() {
-            // 取能补上缺口的最小规格；都不够就取最大的。
-            best = Some(match best {
-                None => (index, amount),
-                Some((bi, ba)) => {
-                    if amount >= missing && ba >= missing {
-                        if amount < ba {
-                            (index, amount)
-                        } else {
-                            (bi, ba)
-                        }
-                    } else if amount >= missing {
-                        (index, amount)
-                    } else if ba >= missing {
-                        (bi, ba)
-                    } else if amount > ba {
-                        (index, amount)
-                    } else {
-                        (bi, ba)
-                    }
-                }
-            });
+        if amount >= missing && covers.is_none_or(|(_, best)| amount < best) {
+            covers = Some((index, amount));
+        }
+        if largest.is_none_or(|(_, best)| amount > best) {
+            largest = Some((index, amount));
         }
     }
-    if let Some((index, _)) = best {
+    if let Some((index, _)) = covers.or(largest) {
         let id = state.inventory[index].item;
         consume_one(state, index);
         apply_potion(state, data, id);
@@ -203,7 +235,8 @@ fn should_retreat(state: &GameState, data: &GameData) -> bool {
     if derived.max_hp == 0 {
         return false;
     }
-    let low = f64::from(state.hp) / f64::from(derived.max_hp) < data.balance.retreat_hp_ratio;
+    let low = f64::from(state.hp + state.hot_hp) / f64::from(derived.max_hp)
+        < data.balance.retreat_hp_ratio;
     low && !has_hp_potion(state, data) && state.combat.is_some()
 }
 
@@ -215,6 +248,9 @@ fn has_hp_potion(state: &GameState, data: &GameData) -> bool {
 
 fn retreat(state: &mut GameState, data: &GameData, sink: &mut impl EventSink) {
     state.combat = None;
+    if !data.map(state.current_map).safe_zone {
+        state.return_map = Some(state.current_map);
+    }
     if let Some(safe) = data.safe_map() {
         state.current_map = safe;
     }
@@ -247,19 +283,11 @@ fn try_spawn(state: &mut GameState, data: &GameData, sink: &mut impl EventSink) 
             .copied()
             .unwrap_or(0);
         let wipes = state.boss_wipes.get(&boss.monster_id).copied().unwrap_or(0);
-        if kills >= boss.kills_to_unlock
-            && state.tick_count >= ready
-            && wipes < 2
-            && can_beat(state, data, boss.monster_id)
-        {
-            spawn_monster(state, data, boss.monster_id, true);
-            return;
-        }
-        if kills >= boss.kills_to_unlock
-            && wipes < 2
-            && state.tick_count >= ready
-            && !can_beat(state, data, boss.monster_id)
-        {
+        if kills >= boss.kills_to_unlock && state.tick_count >= ready && wipes < 2 {
+            if can_beat(state, data, boss.monster_id) {
+                spawn_monster(state, data, boss.monster_id, true);
+                return;
+            }
             sink.push_event(GameEvent::BossSkipped {
                 id: boss.monster_id,
             });
@@ -357,7 +385,11 @@ fn player_act(state: &mut GameState, data: &GameData, sink: &mut impl EventSink)
 
 fn pick_skill(state: &GameState, data: &GameData) -> Option<SkillId> {
     let combat = state.combat.as_ref()?;
-    let mut best: Option<(u8, SkillId)> = None;
+    let monster = data.monster(combat.monster);
+    let derived = state.derived_stats(data);
+    // 蓝多时挑最猛的，蓝快见底时挑最省的，免得几下就把蓝打空。
+    let thrifty = derived.max_mp > 0 && state.mp * 3 < derived.max_mp;
+    let mut best: Option<(u8, f32, SkillId)> = None;
     for (id, progress) in &state.skills {
         if !progress.auto {
             continue;
@@ -366,33 +398,79 @@ fn pick_skill(state: &GameState, data: &GameData) -> Option<SkillId> {
         if matches!(def.effect, SkillEffect::Passive(_)) {
             continue;
         }
-        let level = &def.levels[(progress.level as usize - 1).min(def.levels.len() - 1)];
-        if state.level < level.req_level || state.mp < level.mp_cost {
+        let Some(rank) = skill_rank(def, progress, state.level) else {
+            continue;
+        };
+        let level = &def.levels[rank];
+        if state.mp < level.mp_cost {
             continue;
         }
         let ready_at = combat.skill_ready_at.get(id).copied().unwrap_or(0);
         if state.tick_count < ready_at {
             continue;
         }
-        if matches!(def.effect, SkillEffect::BuffNextAttack(_))
-            && combat.next_attack_power.is_some()
-        {
-            continue;
-        }
-        if matches!(def.effect, SkillEffect::Summon(_))
-            && state
-                .pet
-                .as_ref()
-                .is_some_and(|pet| pet.hp > 0 && pet.expires_at > state.tick_count)
-        {
+        if !worth_casting(state, data, combat, monster, &def.effect, level.power) {
             continue;
         }
         let priority = skill_priority(&def.effect);
-        if best.is_none_or(|(score, _)| priority > score) {
-            best = Some((priority, *id));
+        let mut power = level.power.min + level.power.max;
+        if let SkillEffect::Damage(effect) | SkillEffect::AoeDamage(effect) = &def.effect {
+            if monster.undead {
+                power *= effect.undead_bonus;
+            }
+        }
+        let value = if thrifty {
+            power / level.mp_cost.max(1) as f32
+        } else {
+            power
+        };
+        let better = match best {
+            None => true,
+            Some((score, best_value, _)) => {
+                priority > score || (priority == score && value > best_value)
+            }
+        };
+        if better {
+            best = Some((priority, value, *id));
         }
     }
-    best.map(|(_, id)| id)
+    best.map(|(_, _, id)| id)
+}
+
+/// 放了也白放的就不放：满血不加血、盾还在不重开、毒还没完不重上、怪快死了不上 debuff。
+fn worth_casting(
+    state: &GameState,
+    data: &GameData,
+    combat: &Combat,
+    monster: &MonsterDef,
+    effect: &SkillEffect,
+    power: game_data::FRange,
+) -> bool {
+    match effect {
+        SkillEffect::Heal(heal) => {
+            let derived = state.derived_stats(data);
+            let base = source_range(derived, heal.source).midpoint().max(1) as f32;
+            let expected = (base * (power.min + power.max) / 2.0).round() as i32;
+            derived.max_hp - state.hp - state.hot_hp >= expected.max(1)
+        }
+        SkillEffect::BuffStats(_) => state.shield_left == 0,
+        SkillEffect::DebuffDefense(_) => {
+            combat.defense_down_left == 0 && combat.hp * 3 > monster.hp
+        }
+        SkillEffect::Poison(_) => combat.poison_left == 0 && combat.hp * 4 > monster.hp,
+        SkillEffect::Summon(_) => state
+            .pet
+            .as_ref()
+            .is_none_or(|pet| pet.hp <= 0 || pet.expires_at <= state.tick_count),
+        SkillEffect::BuffNextAttack(_) => combat.next_attack_power.is_none(),
+        SkillEffect::Paralyze(_) => {
+            let derived = state.derived_stats(data);
+            let soon = combat.next_monster_attack_at <= state.tick_count.saturating_add(4);
+            soon && state.hp * 10 < derived.max_hp * 7
+        }
+        SkillEffect::Damage(_) | SkillEffect::AoeDamage(_) => true,
+        SkillEffect::Passive(_) => false,
+    }
 }
 
 fn skill_priority(effect: &SkillEffect) -> u8 {
@@ -402,28 +480,48 @@ fn skill_priority(effect: &SkillEffect) -> u8 {
         SkillEffect::Summon(_) => 6,
         SkillEffect::BuffNextAttack(_) => 5,
         SkillEffect::Poison(_) => 4,
-        SkillEffect::AoeDamage(_) => 3,
-        SkillEffect::Damage(_) => 2,
-        SkillEffect::Paralyze(_) => 1,
+        SkillEffect::Paralyze(_) => 3,
+        // 场上只有一只怪，群攻和单体按威力比，不再让群攻天然优先。
+        SkillEffect::AoeDamage(_) | SkillEffect::Damage(_) => 2,
         SkillEffect::Passive(_) => 0,
     }
 }
 
+fn source_range(derived: &crate::state::DerivedStats, source: DamageSource) -> Range {
+    match source {
+        DamageSource::Attack => derived.attack,
+        DamageSource::Magic => derived.magic,
+        DamageSource::Taoism => derived.taoism,
+    }
+}
+
 fn cast_skill(state: &mut GameState, data: &GameData, sink: &mut impl EventSink, id: SkillId) {
-    let progress_level = state.skills.get(&id).map(|p| p.level).unwrap_or(1);
     let def = data.skill(id).clone();
-    let level = &def.levels[(progress_level as usize - 1).min(def.levels.len() - 1)];
+    let Some(rank) = state
+        .skills
+        .get(&id)
+        .and_then(|progress| skill_rank(&def, progress, state.level))
+    else {
+        return;
+    };
+    let level = &def.levels[rank];
     let mp_cost = level.mp_cost;
     let cooldown = ms_to_ticks(level.cooldown_ms);
     let power = level.power.roll(&mut state.rng);
     state.mp -= mp_cost;
+    let char_level = state.level;
     if let Some(progress) = state.skills.get_mut(&id) {
-        progress.exp = progress.exp.saturating_add(1);
         let need = data
             .balance
             .skill_exp_base
             .saturating_mul(u32::from(progress.level));
-        if progress.level < def.max_level && progress.exp >= need {
+        // 下一档要求的角色等级还没到，熟练度就停在满值，等升级后下一发再升。
+        let next_ok = def
+            .levels
+            .get(progress.level as usize)
+            .is_some_and(|next| next.req_level <= char_level);
+        progress.exp = progress.exp.saturating_add(1).min(need);
+        if progress.level < def.max_level && progress.exp >= need && next_ok {
             progress.exp = 0;
             progress.level += 1;
             let new_level = progress.level;
@@ -436,26 +534,39 @@ fn cast_skill(state: &mut GameState, data: &GameData, sink: &mut impl EventSink,
     sink.push_event(GameEvent::SkillCast { id });
     let interval = state.derived_stats(data).attack_interval;
     if let Some(combat) = state.combat.as_mut() {
-        combat
-            .skill_ready_at
-            .insert(id, state.tick_count.saturating_add(cooldown));
-        if level.cooldown_ms == 0 {
+        if level.cooldown_ms > 0 {
+            combat
+                .skill_ready_at
+                .insert(id, state.tick_count.saturating_add(cooldown));
+        }
+        // 施法占掉这一拍。烈火只是给下一击蓄力，不占。
+        if !matches!(def.effect, SkillEffect::BuffNextAttack(_)) {
             combat.next_player_attack_at = state.tick_count.saturating_add(interval);
         }
     }
     match &def.effect {
         SkillEffect::Damage(effect) | SkillEffect::AoeDamage(effect) => {
-            let mult = if effect.multiplier_from_power {
+            let mut mult = if effect.multiplier_from_power {
                 power
             } else {
                 1.0
             };
-            spell_hit(state, data, sink, effect.source, mult, false);
+            if state
+                .combat
+                .as_ref()
+                .is_some_and(|c| data.monster(c.monster).undead)
+            {
+                mult *= effect.undead_bonus;
+            }
+            spell_hit(state, data, sink, effect.source, mult);
         }
-        SkillEffect::Heal(_) => {
+        SkillEffect::Heal(heal) => {
             let derived = *state.derived_stats(data);
-            let heal = ((derived.taoism.roll(&mut state.rng).max(1) as f32) * power).round() as i32;
-            state.hp = (state.hp + heal.max(1)).min(derived.max_hp);
+            let base = source_range(&derived, heal.source)
+                .roll(&mut state.rng)
+                .max(1);
+            let amount = ((base as f32) * power).round() as i32;
+            state.hp = (state.hp + amount.max(1)).min(derived.max_hp);
         }
         SkillEffect::BuffNextAttack(_) => {
             if let Some(combat) = state.combat.as_mut() {
@@ -478,22 +589,18 @@ fn cast_skill(state: &mut GameState, data: &GameData, sink: &mut impl EventSink,
             }
         }
         SkillEffect::Poison(poison) => {
-            let tao = state.derived_stats(data).taoism.midpoint().max(1);
-            let undead = data
-                .monster(
-                    state
-                        .combat
-                        .as_ref()
-                        .map(|c| c.monster)
-                        .unwrap_or(MonsterId(0)),
-                )
-                .undead;
+            let derived = *state.derived_stats(data);
+            let base = source_range(&derived, poison.source).midpoint().max(1);
+            let undead = state
+                .combat
+                .as_ref()
+                .is_some_and(|c| data.monster(c.monster).undead);
             let bonus = if undead { poison.undead_bonus } else { 1.0 };
-            let dps = ((tao as f32) * poison.tick_ratio * power * bonus)
+            let per_pulse = ((base as f32) * poison.tick_ratio * power * bonus)
                 .round()
                 .max(1.0) as i32;
             if let Some(combat) = state.combat.as_mut() {
-                combat.poison_dps = dps;
+                combat.poison_dps = per_pulse;
                 combat.poison_left = poison.duration_ticks;
             }
         }
@@ -550,24 +657,19 @@ fn basic_attack(state: &mut GameState, data: &GameData, sink: &mut impl EventSin
         sink.push_event(GameEvent::Missed { target });
         return;
     }
-    let mut bonus = 1.0f32;
-    if let Some((source, power)) = state
-        .combat
-        .as_mut()
-        .and_then(|c| c.next_attack_power.take())
-    {
-        if source == DamageSource::Attack {
-            bonus = power;
-        }
-    }
+    let mut bonus = charged_power(state, DamageSource::Attack);
     let procs: Vec<(f32, f32, u8)> = state
         .skills
         .iter()
-        .filter_map(|(id, progress)| match &data.skill(*id).effect {
-            SkillEffect::Passive(passive) if passive.proc_chance > 0.0 => {
-                Some((passive.proc_chance, passive.proc_power, progress.level))
+        .filter_map(|(id, progress)| {
+            let def = data.skill(*id);
+            match &def.effect {
+                SkillEffect::Passive(passive) if passive.proc_chance > 0.0 => {
+                    let rank = skill_rank(def, progress, state.level)?;
+                    Some((passive.proc_chance, passive.proc_power, rank as u8 + 1))
+                }
+                _ => None,
             }
-            _ => None,
         })
         .collect();
     for (chance, power, level) in procs {
@@ -577,19 +679,43 @@ fn basic_attack(state: &mut GameState, data: &GameData, sink: &mut impl EventSin
     }
     let rolled = derived.attack.roll(&mut state.rng);
     let raw = ((rolled as f32) * bonus).round() as i32;
-    let mut defense = monster.defense;
-    if let Some(combat) = state.combat.as_ref() {
-        if combat.defense_down > 0.0 {
-            let keep = 1.0 - combat.defense_down;
-            defense = Range::new(
-                (defense.min as f32 * keep) as i32,
-                (defense.max as f32 * keep) as i32,
-            );
-        }
-    }
-    let mitigated = defense.roll(&mut state.rng);
+    let mitigated = effective_defense(state, monster, DamageSource::Attack).roll(&mut state.rng);
     emit_player_damage(state, sink, target, raw, mitigated);
     wear_weapon(state, data);
+}
+
+/// 烈火这类蓄力：物理出手时取走并返回倍率，没有就是 1。
+fn charged_power(state: &mut GameState, source: DamageSource) -> f32 {
+    if source != DamageSource::Attack {
+        return 1.0;
+    }
+    match state
+        .combat
+        .as_mut()
+        .and_then(|c| c.next_attack_power.take())
+    {
+        Some((DamageSource::Attack, power)) => power,
+        _ => 1.0,
+    }
+}
+
+/// 怪物这一下吃哪条防御。神圣战甲术的降防对物理、法术和宝宝都生效。
+fn effective_defense(state: &GameState, monster: &MonsterDef, source: DamageSource) -> Range {
+    let defense = if source == DamageSource::Attack {
+        monster.defense
+    } else {
+        monster.magic_defense
+    };
+    match state.combat.as_ref() {
+        Some(combat) if combat.defense_down > 0.0 => {
+            let keep = 1.0 - combat.defense_down;
+            Range::new(
+                (defense.min as f32 * keep) as i32,
+                (defense.max as f32 * keep) as i32,
+            )
+        }
+        _ => defense,
+    }
 }
 
 fn spell_hit(
@@ -598,7 +724,6 @@ fn spell_hit(
     sink: &mut impl EventSink,
     source: DamageSource,
     mult: f32,
-    check_hit: bool,
 ) {
     let target = match state.combat.as_ref() {
         Some(combat) => combat.monster,
@@ -606,25 +731,17 @@ fn spell_hit(
     };
     let monster = data.monster(target);
     let derived = *state.derived_stats(data);
-    if check_hit {
+    // 法术必中；刺杀、半月这类物理技能和普攻一样要判命中。
+    if source == DamageSource::Attack {
         let hit = hit_chance(data, derived.accuracy, monster.agility);
         if !state.rng.gen_bool(hit) {
             sink.push_event(GameEvent::Missed { target });
             return;
         }
     }
-    let range = match source {
-        DamageSource::Attack => derived.attack,
-        DamageSource::Magic => derived.magic,
-        DamageSource::Taoism => derived.taoism,
-    };
-    let raw = ((range.roll(&mut state.rng) as f32) * mult).round() as i32;
-    let defense = if source == DamageSource::Attack {
-        monster.defense
-    } else {
-        monster.magic_defense
-    };
-    let mitigated = defense.roll(&mut state.rng);
+    let mult = mult * charged_power(state, source);
+    let raw = ((source_range(&derived, source).roll(&mut state.rng) as f32) * mult).round() as i32;
+    let mitigated = effective_defense(state, monster, source).roll(&mut state.rng);
     emit_player_damage(state, sink, target, raw, mitigated);
 }
 
@@ -681,7 +798,8 @@ fn pet_act(state: &mut GameState, data: &GameData, sink: &mut impl EventSink) {
         .as_ref()
         .map(|c| c.monster)
         .unwrap_or(MonsterId(0));
-    let defense = data.monster(target).defense.roll(&mut state.rng);
+    let monster = data.monster(target);
+    let defense = effective_defense(state, monster, DamageSource::Attack).roll(&mut state.rng);
     let raw = pet.attack.roll(&mut state.rng);
     let damage = raw.saturating_sub(defense).max(0);
     if let Some(combat) = state.combat.as_mut() {
@@ -785,6 +903,18 @@ fn player_dead(
         *wipes = wipes.saturating_add(1);
     }
     state.combat = None;
+    let died_on = state.current_map;
+    state.death_streak = state.death_streak.saturating_add(1);
+    let limit = data.balance.fallback_after_deaths;
+    let mut back_to = died_on;
+    if limit > 0 && state.death_streak % limit == 0 {
+        if let Some(prev) = data.map(died_on).req_map_id {
+            back_to = prev;
+        }
+    }
+    if !data.map(died_on).safe_zone {
+        state.return_map = Some(back_to);
+    }
     if let Some(safe) = data.safe_map() {
         state.current_map = safe;
     }
@@ -793,10 +923,17 @@ fn player_dead(
         .saturating_add(data.balance.death_rest_ticks);
     let revive_hp = state.derived_stats(data).max_hp / 2;
     state.hp = revive_hp.max(1);
+    state.hot_hp = 0;
     sink.push_event(GameEvent::PlayerDied {
         lost_exp: lost,
         dropped_item: dropped,
     });
+    if back_to != died_on {
+        sink.push_event(GameEvent::FellBack {
+            map: back_to,
+            deaths: state.death_streak,
+        });
+    }
     sink.push_event(GameEvent::Resting {
         ticks: data.balance.death_rest_ticks,
     });
@@ -812,11 +949,16 @@ fn finish_kill(state: &mut GameState, data: &GameData, sink: &mut impl EventSink
     state.stats.exp_gained = state.stats.exp_gained.saturating_add(exp);
     state.stats.kills = state.stats.kills.saturating_add(1);
     *state.stats.monster_kills.entry(combat.monster).or_insert(0) += 1;
-    *state.map_kills.entry(state.current_map).or_insert(0) += 1;
+    let here = state.current_map;
+    let kills = {
+        let count = state.map_kills.entry(here).or_insert(0);
+        *count += 1;
+        *count
+    };
     if combat.boss {
         state.boss_wipes.insert(combat.monster, 0);
         let respawn = data
-            .map(state.current_map)
+            .map(here)
             .boss
             .as_ref()
             .map(|b| ms_to_ticks(b.respawn_ms))
@@ -835,7 +977,19 @@ fn finish_kill(state: &mut GameState, data: &GameData, sink: &mut impl EventSink
         exp,
     });
     roll_drops(state, data, sink, combat.monster);
-    let interval = ms_to_ticks(data.map(state.current_map).spawn_interval_ms.max(100));
+    for map in &data.maps {
+        let just_met = map.req_map_id == Some(here)
+            && map
+                .req_map_kills
+                .as_ref()
+                .is_some_and(|(_, need)| *need == kills);
+        if just_met && state.level >= map.req_level {
+            sink.push_event(GameEvent::MapUnlocked {
+                map: map.runtime_id,
+            });
+        }
+    }
+    let interval = ms_to_ticks(data.map(here).spawn_interval_ms.max(100));
     state.next_spawn_at = state.tick_count.saturating_add(interval);
 }
 
@@ -964,7 +1118,18 @@ fn while_level(state: &mut GameState, data: &GameData, sink: &mut impl EventSink
         let derived = *state.derived_stats(data);
         state.hp = derived.max_hp;
         state.mp = derived.max_mp;
+        state.death_streak = 0;
         sink.push_event(GameEvent::LevelUp { level: state.level });
+        for map in &data.maps {
+            if map.req_level == state.level
+                && !map.safe_zone
+                && crate::command::map_unlocked(state, data, map.runtime_id)
+            {
+                sink.push_event(GameEvent::MapUnlocked {
+                    map: map.runtime_id,
+                });
+            }
+        }
         leveled = true;
     }
     if leveled {
@@ -976,33 +1141,30 @@ fn auto_advance(state: &mut GameState, data: &GameData, sink: &mut impl EventSin
     if !state.automation.auto_advance
         || state.level < data.balance.auto_advance_level
         || state.combat.is_some()
+        || data.map(state.current_map).safe_zone
     {
         return;
     }
+    // 刚因为连死退回来，这一级先不往深处走，升级后再试。
+    let limit = data.balance.fallback_after_deaths;
+    if limit > 0 && state.death_streak >= limit {
+        return;
+    }
     let current = state.current_map;
+    // 地图是一棵树。半兽庙、沃玛七层、石墓阵→尸王殿这些支线走到头就没有下一张了，
+    // 自动推进只沿主线走，支线留给玩家手动去打 BOSS。人在支线上时，主线下一张解锁了也会回去。
+    let floor = data.map(current).req_level;
     let mut candidate: Option<MapId> = None;
-    for map in &data.maps {
-        if map.runtime_id == current || map.safe_zone {
+    for map in main_line(data) {
+        let def = data.map(map);
+        if map == current || def.req_level <= floor {
             continue;
         }
-        let linked = match map.req_map_id {
-            Some(prev) => prev == current,
-            None => false,
-        };
-        if !linked {
+        if candidate.is_some_and(|id| def.req_level >= data.map(id).req_level) {
             continue;
         }
-        if state.level < map.req_level {
-            continue;
-        }
-        if let Some((_, need)) = &map.req_map_kills {
-            let have = state.map_kills.get(&current).copied().unwrap_or(0);
-            if have < *need {
-                continue;
-            }
-        }
-        if candidate.is_none_or(|id| map.req_level < data.map(id).req_level) {
-            candidate = Some(map.runtime_id);
+        if crate::command::map_unlocked(state, data, map) {
+            candidate = Some(map);
         }
     }
     if let Some(map) = candidate {
@@ -1010,6 +1172,26 @@ fn auto_advance(state: &mut GameState, data: &GameData, sink: &mut impl EventSin
         state.next_spawn_at = state.tick_count;
         sink.push_event(GameEvent::MapChanged { map });
     }
+}
+
+/// 主线：从门槛最高的野外图往回顺着前置走到起点。顺序是从深到浅。
+pub fn main_line(data: &GameData) -> Vec<MapId> {
+    let deepest = data
+        .maps
+        .iter()
+        .filter(|map| !map.safe_zone)
+        .max_by_key(|map| map.req_level)
+        .map(|map| map.runtime_id);
+    let mut line = Vec::new();
+    let mut cursor = deepest;
+    while let Some(map) = cursor {
+        if line.contains(&map) || line.len() > data.maps.len() {
+            break;
+        }
+        line.push(map);
+        cursor = data.map(map).req_map_id;
+    }
+    line
 }
 
 fn check_achievements(state: &mut GameState, sink: &mut impl EventSink) {
@@ -1049,5 +1231,3 @@ fn hit_chance(data: &GameData, accuracy: i32, agility: i32) -> f64 {
     let raw = cfg.base + f64::from(accuracy - agility) * cfg.per_point;
     raw.clamp(cfg.min, cfg.max)
 }
-
-use std::collections::BTreeMap;

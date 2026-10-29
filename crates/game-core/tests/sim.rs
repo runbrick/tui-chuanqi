@@ -12,6 +12,19 @@ fn warrior(seed: u64) -> (GameState, GameData) {
     (state, data)
 }
 
+/// 去掉新手装的角色。需要空背包、空装备的用例用它。
+fn bare(class: Class, seed: u64) -> (GameState, GameData) {
+    let data = data();
+    let mut state = GameState::new("裸", class, Gender::Male, false, &data, seed);
+    state.inventory.clear();
+    for slot in state.equipment.iter_mut() {
+        *slot = None;
+    }
+    state.invalidate_derived();
+    state.clamp_vitals(&data);
+    (state, data)
+}
+
 #[test]
 fn thousand_ticks_stay_sane() {
     let (mut state, data) = warrior(7);
@@ -36,7 +49,7 @@ fn same_seed_is_deterministic() {
 
 #[test]
 fn full_block_when_attack_cannot_pierce() {
-    let (mut state, data) = warrior(1);
+    let (mut state, data) = bare(Class::Warrior, 1);
     state.base.attack = Range::new(0, 0);
     state.invalidate_derived();
     state.current_map = data.map_id("bichen_deep").unwrap();
@@ -100,7 +113,7 @@ fn pity_forces_the_configured_rare_drop() {
 
 #[test]
 fn gender_mismatch_explains_why() {
-    let (mut state, data) = warrior(1);
+    let (mut state, data) = bare(Class::Warrior, 1);
     let dress = data.item_id("cloth_f").unwrap();
     state
         .inventory
@@ -133,7 +146,7 @@ fn snapshot_warrior_seed_42() {
 
 #[test]
 fn upgrade_rate_near_configured() {
-    let (mut state, data) = warrior(9);
+    let (mut state, data) = bare(Class::Warrior, 9);
     let sword = data.item_id("wooden_sword").unwrap();
     let ore = data.item_id("black_iron_ore").unwrap();
     let ring = data.item_id("iron_ring").unwrap();
@@ -184,7 +197,7 @@ fn upgrade_rate_near_configured() {
 
 #[test]
 fn luck_charm_prevents_shatter() {
-    let (mut state, data) = warrior(1);
+    let (mut state, data) = bare(Class::Warrior, 1);
     let sword = data.item_id("wooden_sword").unwrap();
     let ore = data.item_id("black_iron_ore").unwrap();
     let ring = data.item_id("iron_ring").unwrap();

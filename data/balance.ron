@@ -18,6 +18,17 @@
     auto_fine_level: 15,
     auto_advance_level: 4,
     max_level: 60,
+    // 平时每秒回 1% 血、2% 蓝。低级图靠它就能挂，高级图还是要喝药。
+    regen: (interval_ms: 1000, hp_ratio: 0.01, mp_ratio: 0.02),
+    // 新手装。男女布衣都写上，穿不上的那件会跳过。
+    starting_items: [
+        (item: "wooden_sword"),
+        (item: "cloth_m"),
+        (item: "cloth_f"),
+        (item: "potion_hp_small", count: 10),
+        (item: "potion_mp_small", count: 10),
+    ],
+    fallback_after_deaths: 3,
     classes: (
         warrior: (
             hp: 40, mp: 15,
@@ -27,18 +38,18 @@
             growth: (hp: 8, mp: 1, attack: (1, 1), magic: (0, 0), taoism: (0, 0), defense: (0, 0), magic_defense: (0, 0), accuracy: 0, agility: 0),
         ),
         mage: (
-            hp: 22, mp: 36,
+            hp: 26, mp: 36,
             attack: (1, 2), magic: (2, 6), taoism: (0, 0),
             defense: (0, 0), magic_defense: (0, 1),
             accuracy: 4, agility: 7, attack_interval_ms: 1400,
-            growth: (hp: 3, mp: 6, attack: (0, 0), magic: (1, 2), taoism: (0, 0), defense: (0, 0), magic_defense: (0, 1), accuracy: 0, agility: 0),
+            growth: (hp: 4, mp: 6, attack: (0, 0), magic: (1, 2), taoism: (0, 0), defense: (0, 0), magic_defense: (0, 1), accuracy: 0, agility: 0),
         ),
         taoist: (
             hp: 30, mp: 26,
             attack: (1, 3), magic: (0, 1), taoism: (2, 5),
             defense: (0, 1), magic_defense: (0, 1),
             accuracy: 6, agility: 5, attack_interval_ms: 1300,
-            growth: (hp: 5, mp: 4, attack: (0, 1), magic: (0, 0), taoism: (1, 1), defense: (0, 0), magic_defense: (0, 0), accuracy: 0, agility: 0),
+            growth: (hp: 5, mp: 4, attack: (0, 1), magic: (0, 0), taoism: (1, 2), defense: (0, 0), magic_defense: (0, 0), accuracy: 0, agility: 0),
         ),
     ),
 )

@@ -235,7 +235,21 @@ NPC 在挂机游戏里退化成"功能入口"（商店 / 仓库 / 技能书 / �
 
 ## `balance.ron`
 
-见 `03-game-design.md` 末尾。所有公式系数、经验曲线、离线上限、升级成功率都在这里。
+见 `03-game-design.md` 末尾。所有公式系数、经验曲线、离线上限、升级成功率都在这里。下面几个字段可以省略，省略时用括号里的默认值：
+
+```ron
+    regen: (interval_ms: 1000, hp_ratio: 0.01, mp_ratio: 0.02),   // 自然回复（关闭）
+    starting_items: [(item: "wooden_sword"), (item: "potion_hp_small", count: 10)],  // 新手装（无）
+    fallback_after_deaths: 3,   // 同一级连死几次退回前置地图，0 不退（3）
+```
+
+新手装只影响新建角色。装备能穿就直接穿上，性别或职业不符的那件跳过，所以男女款可以都写上。
+
+技能和 NPC 里也有可省略的字段：
+
+- `Poison((..., source: Magic))`：持续伤害按哪条属性算，默认 `Taoism`。
+- `Damage((..., undead_bonus: 1.5))`：对不死系的倍率，默认 1。
+- `Repair((cost_per_durability: 1, price_ratio: Some(0.3)))`：填了 `price_ratio` 就按「售价 × 比例 × 损失比例」收费，不填按每点耐久收费。
 
 ## 加载时校验（`game-data` 必须实现）
 

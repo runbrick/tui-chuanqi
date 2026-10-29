@@ -13,6 +13,8 @@ pub struct LogLine {
     pub level: bool,
     /// 死亡或碎裂。
     pub bad: bool,
+    /// 自己挂彩。颜色比 `bad` 淡，方便一眼分清谁在打谁。
+    pub hurt: bool,
 }
 
 /// 格式化一条事件。
@@ -26,6 +28,7 @@ pub fn format_event(event: &GameEvent, data: &GameData) -> LogLine {
         rare: false,
         level: false,
         bad: false,
+        hurt: false,
     };
     line.text = match event {
         GameEvent::Attacked { target, damage, .. } => {
@@ -34,6 +37,7 @@ pub fn format_event(event: &GameEvent, data: &GameData) -> LogLine {
         GameEvent::Blocked { target } => format!("{} 抵挡了你的攻击", monster(*target)),
         GameEvent::Missed { target } => format!("攻击 {} 落空", monster(*target)),
         GameEvent::MonsterHit { source, damage } => {
+            line.hurt = true;
             format!("{} 击中你，{} 点", monster(*source), damage)
         }
         GameEvent::MonsterBlocked { source } => format!("你抵挡了 {} 的攻击", monster(*source)),
@@ -95,6 +99,26 @@ pub fn format_event(event: &GameEvent, data: &GameData) -> LogLine {
             line.level = true;
             format!("学会了 {}", skill(*id))
         }
+        GameEvent::DotDamage { target, damage } => {
+            format!("{} 持续受伤 {} 点", monster(*target), damage)
+        }
+        GameEvent::MapUnlocked { map } => {
+            line.level = true;
+            format!("解锁新地图：{}（按 4 去地图，A 自动推进）", map_name(*map))
+        }
+        GameEvent::ReturnedToHunt { map } => format!("休息好了，回到 {}", map_name(*map)),
+        GameEvent::FellBack { map, deaths } => {
+            line.bad = true;
+            format!("连死 {deaths} 次，先回 {} 练级", map_name(*map))
+        }
+        GameEvent::Restocked { hp, mp, gold } => match (*hp, *mp) {
+            (0, mp) => format!("补了蓝药 {mp} 瓶，花费 {gold} 金币"),
+            (hp, 0) => format!("补了红药 {hp} 瓶，花费 {gold} 金币"),
+            (hp, mp) => format!("补了红药 {hp} 瓶、蓝药 {mp} 瓶，花费 {gold} 金币"),
+        },
+        GameEvent::Repaired { pieces, gold } => format!("修好 {pieces} 件装备，花费 {gold} 金币"),
+        GameEvent::Equipped { id } => format!("穿上 {}", item(*id)),
+        GameEvent::Unequipped { id } => format!("脱下 {}", item(*id)),
     };
     if let GameEvent::ItemDropped { id, count, rare } = event {
         line.rare = *rare;

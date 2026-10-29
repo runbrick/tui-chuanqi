@@ -143,6 +143,56 @@ pub enum GameEvent {
         /// 技能。
         id: SkillId,
     },
+    /// 毒或火墙跳了一次。不吃防御。
+    DotDamage {
+        /// 目标。
+        target: MonsterId,
+        /// 伤害。
+        damage: i32,
+    },
+    /// 新地图刚解锁。
+    MapUnlocked {
+        /// 地图。
+        map: MapId,
+    },
+    /// 休息完，回到死前或回城前的地图。
+    ReturnedToHunt {
+        /// 地图。
+        map: MapId,
+    },
+    /// 连续死亡太多，退回上一张图。
+    FellBack {
+        /// 退回的地图。
+        map: MapId,
+        /// 连死次数。
+        deaths: u8,
+    },
+    /// 补药完成。
+    Restocked {
+        /// 买了多少瓶红。
+        hp: u32,
+        /// 买了多少瓶蓝。
+        mp: u32,
+        /// 花费。
+        gold: u64,
+    },
+    /// 修理完成。
+    Repaired {
+        /// 修了几件。
+        pieces: u32,
+        /// 花费。
+        gold: u64,
+    },
+    /// 穿上装备。
+    Equipped {
+        /// 物品。
+        id: ItemId,
+    },
+    /// 脱下装备。
+    Unequipped {
+        /// 物品。
+        id: ItemId,
+    },
 }
 
 /// 离线推演的聚合，不保留逐条战斗日志。

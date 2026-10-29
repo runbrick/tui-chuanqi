@@ -1,11 +1,11 @@
 [
     (id: "bichen_weapon", name: "武器店老板", version_origin: r#1.67, map: "bichen_city", greeting: "想买把好剑？", services: [
         Shop((stock: ["wooden_sword", "dagger", "short_sword", "bronze_sword", "iron_sword"], buy_markup: 1.0, sell_rate: 0.3)),
-        Repair((cost_per_durability: 1)),
+        Repair((cost_per_durability: 1, price_ratio: Some(0.3))),
     ]),
     (id: "bichen_armor", name: "服装店老板", version_origin: r#1.67, map: "bichen_city", greeting: "衣服要合身。", services: [
         Shop((stock: ["cloth_m", "cloth_f", "light_armor_m", "light_armor_f", "mage_cloth_m", "mage_cloth_f", "tao_cloth_m", "tao_cloth_f", "iron_helmet"], buy_markup: 1.0, sell_rate: 0.3)),
-        Repair((cost_per_durability: 1)),
+        Repair((cost_per_durability: 1, price_ratio: Some(0.3))),
     ]),
     (id: "bichen_potion", name: "药店老板", version_origin: r#1.67, map: "bichen_city", greeting: "药都在这儿，挂机前补满。", services: [
         Shop((stock: ["potion_hp_small", "potion_hp_mid", "potion_hp_large", "potion_mp_small", "potion_mp_mid", "potion_mp_large", "sun_water"], buy_markup: 1.0, sell_rate: 0.4)),
@@ -13,7 +13,7 @@
     (id: "bichen_books", name: "书店老板", version_origin: r#1.67, map: "bichen_city", greeting: "书在架子上，自己看等级。", services: [
         Shop((stock: [
             "book_basic_sword", "book_power_hit", "book_thrust", "book_half_moon",
-            "book_fire_ball", "book_great_fire", "book_repel", "book_heal", "book_spirit", "book_poison", "book_soul_fire",
+            "book_fire_ball", "book_great_fire", "book_repel", "book_thunder", "book_heal", "book_spirit", "book_poison", "book_soul_fire",
         ], buy_markup: 1.2, sell_rate: 0.2)),
     ]),
     (id: "bichen_accessory", name: "首饰店老板", version_origin: r#1.67, map: "bichen_city", greeting: "戒指手镯，成套买更划算。", services: [

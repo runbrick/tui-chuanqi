@@ -176,9 +176,9 @@ pub struct Combat {
     pub skill_ready_at: BTreeMap<SkillId, u64>,
     /// 烈火等“下一击”加成，打完清掉。
     pub next_attack_power: Option<(game_data::DamageSource, f32)>,
-    /// 怪物中毒剩余。
+    /// 怪物中毒剩余 tick。
     pub poison_left: u32,
-    /// 每 tick 毒伤。
+    /// 每跳（10 tick）毒伤。
     pub poison_dps: i32,
     /// 怪物防御降低比例，0..1。
     pub defense_down: f32,
@@ -305,6 +305,10 @@ pub struct GameState {
     pub achievements: BTreeSet<Achievement>,
     /// 下次刷怪 tick。
     pub next_spawn_at: u64,
+    /// 死亡或没药回城前所在的地图。休息完自动回去；玩家手动换图就清掉。
+    pub return_map: Option<MapId>,
+    /// 升级前连续死了几次。连死太多就退回上一张图，升级或手动换图清零。
+    pub death_streak: u8,
     /// 确定性随机数。
     pub rng: Pcg64,
     pub(crate) derived: OnceCell<DerivedStats>,
@@ -392,11 +396,50 @@ impl GameState {
             automation,
             achievements: BTreeSet::new(),
             next_spawn_at: 0,
+            return_map: None,
+            death_streak: 0,
             rng: Pcg64::seed_from_u64(seed),
             derived: OnceCell::new(),
         };
+        state.give_starting_items(data);
         state.clamp_vitals(data);
+        state.hp = state.derived_stats(data).max_hp;
+        state.mp = state.derived_stats(data).max_mp;
         state
+    }
+
+    /// 新手装。装备能穿就穿，性别或职业不符的直接跳过，所以男女款可以都写上。
+    fn give_starting_items(&mut self, data: &GameData) {
+        for start in &data.balance.starting_items {
+            let Some(item) = data.item_id(&start.item) else {
+                continue;
+            };
+            let def = data.item(item);
+            if let Some(gear) = def.kind.gear() {
+                let fits = self.level >= gear.req_level
+                    && gear.req_class.allows(self.class)
+                    && (!def.kind.is_armor() || gear.gender.allows(self.gender));
+                let slot = gear.slot.index();
+                if fits && self.equipment[slot].is_none() {
+                    self.equipment[slot] = Some(ItemStack::fresh(item, 1, data, &mut self.rng));
+                    self.invalidate_derived();
+                }
+                continue;
+            }
+            if start.count == 0 {
+                continue;
+            }
+            if let Some(stack) = self
+                .inventory
+                .iter_mut()
+                .find(|stack| def.stackable && stack.item == item)
+            {
+                stack.count = stack.count.saturating_add(start.count);
+            } else {
+                let stack = ItemStack::fresh(item, start.count, data, &mut self.rng);
+                self.inventory.push(stack);
+            }
+        }
     }
 
     /// 从已迁移的存档结构恢复。未知 slug 会返回错误。
@@ -519,6 +562,19 @@ pub fn ms_to_ticks(ms: u32) -> u64 {
     (u64::from(ms) / crate::TICK_MS).max(1)
 }
 
+/// 技能实际生效的等级下标。熟练度升上去但角色等级还没到那一档的要求时，
+/// 按能用的最高一档算，而不是整个技能都放不出来。连第一档都不够就返回 `None`。
+pub fn skill_rank(
+    def: &game_data::SkillDef,
+    progress: &SkillProgress,
+    level: u16,
+) -> Option<usize> {
+    let trained = (progress.level.max(1) as usize).min(def.levels.len());
+    def.levels[..trained]
+        .iter()
+        .rposition(|tier| tier.req_level <= level)
+}
+
 fn base_at_level(row: &ClassBaseline, level: u16) -> BaseStats {
     let steps = i32::from(level.saturating_sub(1));
     let grow = |base: Range, per: Range| {
@@ -576,9 +632,11 @@ fn compute_derived(state: &GameState, data: &GameData) -> DerivedStats {
         max_mp += gear.mp;
     }
     for (id, progress) in &state.skills {
-        if let game_data::SkillEffect::Passive(passive) = &data.skill(*id).effect {
-            let ranks = i32::from(progress.level.max(1));
-            accuracy += passive.accuracy * ranks;
+        let def = data.skill(*id);
+        if let game_data::SkillEffect::Passive(passive) = &def.effect {
+            if let Some(rank) = skill_rank(def, progress, state.level) {
+                accuracy += passive.accuracy * (rank as i32 + 1);
+            }
         }
     }
     if state.buff_left > 0 {
@@ -611,6 +669,9 @@ mod tests {
     fn weapon_changes_attack_and_unequip_reverts() {
         let data = data();
         let mut state = GameState::new("测", Class::Warrior, Gender::Male, false, &data, 1);
+        state.inventory.clear();
+        state.equipment = std::array::from_fn(|_| None);
+        state.invalidate_derived();
         let before = state.derived_stats(&data).attack;
         let sword = data.item_id("wooden_sword").unwrap();
         state

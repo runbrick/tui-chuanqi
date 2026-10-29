@@ -237,6 +237,20 @@ pub(crate) fn validate(
     if balance.upgrade_success_rates.is_empty() {
         return Err(fail("balance.ron", "upgrade_success_rates", "不能为空", ""));
     }
+    for start in &balance.starting_items {
+        if !item_ids.contains(start.item.as_str()) {
+            return Err(fail(
+                "balance.ron",
+                "starting_items",
+                format!("引用了不存在的物品 '{}'", start.item),
+                suggest(&start.item, &item_ids),
+            ));
+        }
+    }
+    let regen = &balance.regen;
+    if !(0.0..=1.0).contains(&regen.hp_ratio) || !(0.0..=1.0).contains(&regen.mp_ratio) {
+        return Err(fail("balance.ron", "regen", "回复比例必须在 [0, 1]", ""));
+    }
     for rate in &balance.upgrade_success_rates {
         if !(0.0..=1.0).contains(rate) {
             return Err(fail(

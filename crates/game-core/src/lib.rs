@@ -9,8 +9,9 @@ mod state;
 mod tick;
 
 pub use command::{
-    attack_interval_ms, class_label, compact_inventory, compare_equip, sale_gold, upgrade_preview,
-    validate_name, Command, CoreError, StatDelta,
+    attack_interval_ms, class_label, compact_inventory, compare_equip, map_block, repair_cost,
+    repair_service, restock_targets, sale_gold, upgrade_preview, validate_name, Command, CoreError,
+    MapBlock, StatDelta,
 };
 pub use event::{GameEvent, OfflineReport};
 pub use save::{
@@ -18,9 +19,10 @@ pub use save::{
     SAVE_VERSION,
 };
 pub use state::{
-    ms_to_ticks, Achievement, Automation, GameState, ItemStack, LifetimeStats, PityKey,
+    ms_to_ticks, skill_rank, Achievement, Automation, GameState, ItemStack, LifetimeStats, PityKey,
     SkillProgress, SLOT_COUNT,
 };
+pub use tick::main_line;
 
 /// 逻辑 tick 长度。
 pub const TICK_MS: u64 = 100;

@@ -67,9 +67,12 @@ pub enum CoreError {
     /// 强化过的武器不能直接卖。
     #[error("强化过的武器不能卖")]
     Upgraded,
-    /// 这一格没有这么多。
+    /// 数量不够。
     #[error("数量不够，这叠只有 {0} 个")]
     NotEnoughCount(u32),
+    /// 药已经够了。
+    #[error("药已经够了，不用补")]
+    StockFull,
 }
 
 /// 换装前后的属性差，正数是变强。
@@ -202,7 +205,7 @@ pub enum Command {
         /// 用作“首饰”的背包下标，决定加成方向。
         accessory_index: usize,
     },
-    /// 按预算把红蓝药补到目标瓶数。
+    /// 按预算把红蓝药补到目标瓶数。钱不够时两边轮流买，能买多少买多少。
     Restock {
         /// 金创药目标数量。
         hp: u32,
@@ -220,8 +223,8 @@ impl Command {
     ) -> Result<Vec<GameEvent>, CoreError> {
         let mut events = Vec::new();
         match self {
-            Self::Equip { index } => equip(state, data, index)?,
-            Self::Unequip { slot } => unequip(state, data, slot)?,
+            Self::Equip { index } => equip(state, data, index, &mut events)?,
+            Self::Unequip { slot } => unequip(state, data, slot, &mut events)?,
             Self::Use { index } => use_item(state, data, index, &mut events)?,
             Self::Drop { index } => {
                 let _ = take_bag(state, index)?;
@@ -233,7 +236,7 @@ impl Command {
                 stock_index,
                 count,
             } => buy(state, data, npc, stock_index, count)?,
-            Self::Repair => repair_all(state, data)?,
+            Self::Repair => repair_all(state, data, &mut events)?,
             Self::Deposit { index } => deposit(state, data, index)?,
             Self::Withdraw { index } => withdraw(state, data, index)?,
             Self::ToggleSkill { index } => toggle_skill(state, data, index)?,
@@ -259,7 +262,7 @@ impl Command {
             Self::UpgradeWeapon { accessory_index } => {
                 upgrade(state, data, accessory_index, &mut events)?
             }
-            Self::Restock { hp, mp } => restock(state, data, hp, mp)?,
+            Self::Restock { hp, mp } => restock(state, data, hp, mp, &mut events)?,
         }
         Ok(events)
     }
@@ -300,7 +303,12 @@ fn take_bag(state: &mut GameState, index: usize) -> Result<ItemStack, CoreError>
     Ok(state.inventory.remove(index))
 }
 
-fn equip(state: &mut GameState, data: &GameData, index: usize) -> Result<(), CoreError> {
+fn equip(
+    state: &mut GameState,
+    data: &GameData,
+    index: usize,
+    events: &mut Vec<GameEvent>,
+) -> Result<(), CoreError> {
     let stack = state.inventory.get(index).ok_or(CoreError::BadIndex)?;
     let def = data.item(stack.item);
     let gear = def.kind.gear().ok_or(CoreError::CannotEquip)?;
@@ -315,6 +323,7 @@ fn equip(state: &mut GameState, data: &GameData, index: usize) -> Result<(), Cor
     }
     let slot = find_slot(state, gear.slot).ok_or(CoreError::CannotEquip)?;
     let stack = take_bag(state, index)?;
+    let id = stack.item;
     if let Some(old) = state.equipment[slot.index()].take() {
         state
             .inventory
@@ -323,6 +332,7 @@ fn equip(state: &mut GameState, data: &GameData, index: usize) -> Result<(), Cor
     state.equipment[slot.index()] = Some(stack);
     state.invalidate_derived();
     state.clamp_vitals(data);
+    events.push(GameEvent::Equipped { id });
     Ok(())
 }
 
@@ -338,13 +348,19 @@ fn find_slot(state: &GameState, item_slot: EquipSlot) -> Option<EquipSlot> {
         .or(Some(preferred[0]))
 }
 
-fn unequip(state: &mut GameState, data: &GameData, slot: EquipSlot) -> Result<(), CoreError> {
+fn unequip(
+    state: &mut GameState,
+    data: &GameData,
+    slot: EquipSlot,
+    events: &mut Vec<GameEvent>,
+) -> Result<(), CoreError> {
     if state.inventory.len() >= data.balance.inventory_slots as usize {
         return Err(CoreError::BagFull);
     }
     let stack = state.equipment[slot.index()]
         .take()
         .ok_or(CoreError::EmptySlot)?;
+    events.push(GameEvent::Unequipped { id: stack.item });
     state.inventory.push(stack);
     state.invalidate_derived();
     state.clamp_vitals(data);
@@ -397,7 +413,7 @@ fn use_item(
             events.push(GameEvent::SkillLearned { id: skill });
         }
         ItemKind::Weapon(_) | ItemKind::Armor(_) | ItemKind::Helmet(_) | ItemKind::Accessory(_) => {
-            equip(state, data, index)?;
+            equip(state, data, index, events)?;
         }
         _ => return Err(CoreError::NotUsable),
     }
@@ -521,35 +537,63 @@ fn can_fit(state: &GameState, data: &GameData, item: ItemId, count: u32) -> bool
     state.inventory.len() + need <= data.balance.inventory_slots as usize
 }
 
-fn repair_all(state: &mut GameState, data: &GameData) -> Result<(), CoreError> {
-    let cost_per = data
-        .npcs
-        .iter()
-        .find_map(|npc| {
-            npc.services.iter().find_map(|service| match service {
-                game_data::NpcService::Repair(repair) => Some(repair.cost_per_durability),
-                _ => None,
-            })
+/// 第一家提供修理的 NPC。
+pub fn repair_service(data: &GameData) -> Option<&game_data::RepairService> {
+    data.npcs.iter().find_map(|npc| {
+        npc.services.iter().find_map(|service| match service {
+            game_data::NpcService::Repair(repair) => Some(repair),
+            _ => None,
         })
-        .unwrap_or(1);
-    let mut bill = 0u64;
-    let mut any = false;
-    let consider = |stack: &ItemStack, bill: &mut u64, any: &mut bool| {
-        let Some(gear) = data.item(stack.item).kind.gear() else {
-            return;
-        };
-        if gear.durability > stack.durability {
-            *any = true;
-            *bill += u64::from(gear.durability - stack.durability) * u64::from(cost_per.max(1));
+    })
+}
+
+/// 修满这一件要多少钱。不用修返回 `None`。
+pub fn repair_cost(
+    data: &GameData,
+    service: &game_data::RepairService,
+    stack: &ItemStack,
+) -> Option<u64> {
+    let def = data.item(stack.item);
+    let gear = def.kind.gear()?;
+    if gear.durability == 0 || stack.durability >= gear.durability {
+        return None;
+    }
+    let missing = gear.durability - stack.durability;
+    Some(match service.price_ratio {
+        Some(ratio) => {
+            let share = f64::from(missing) / f64::from(gear.durability);
+            (f64::from(def.price) * f64::from(ratio) * share)
+                .ceil()
+                .max(1.0) as u64
         }
+        None => u64::from(missing) * u64::from(service.cost_per_durability.max(1)),
+    })
+}
+
+fn repair_all(
+    state: &mut GameState,
+    data: &GameData,
+    events: &mut Vec<GameEvent>,
+) -> Result<(), CoreError> {
+    let fallback = game_data::RepairService {
+        cost_per_durability: 1,
+        price_ratio: None,
     };
-    for stack in state.equipment.iter().flatten() {
-        consider(stack, &mut bill, &mut any);
+    let service = repair_service(data).unwrap_or(&fallback);
+    let mut bill = 0u64;
+    let mut pieces = 0u32;
+    for stack in state
+        .equipment
+        .iter()
+        .flatten()
+        .chain(state.inventory.iter())
+    {
+        if let Some(cost) = repair_cost(data, service, stack) {
+            bill = bill.saturating_add(cost);
+            pieces += 1;
+        }
     }
-    for stack in &state.inventory {
-        consider(stack, &mut bill, &mut any);
-    }
-    if !any {
+    if pieces == 0 {
         return Err(CoreError::NothingToRepair);
     }
     if state.gold < bill {
@@ -558,12 +602,10 @@ fn repair_all(state: &mut GameState, data: &GameData) -> Result<(), CoreError> {
     state.gold -= bill;
     let fix = |stack: &mut ItemStack| {
         if let Some(gear) = data.item(stack.item).kind.gear() {
-            if stack.durability == 0 && gear.durability > 0 {
-                // 修好后属性回来，需要失效缓存。
-            }
             stack.durability = gear.durability;
         }
     };
+    // 修好后损坏的装备属性回来，需要失效缓存。
     let was_broken = state
         .equipment
         .iter()
@@ -578,6 +620,7 @@ fn repair_all(state: &mut GameState, data: &GameData) -> Result<(), CoreError> {
     if was_broken {
         state.invalidate_derived();
     }
+    events.push(GameEvent::Repaired { pieces, gold: bill });
     Ok(())
 }
 
@@ -643,17 +686,34 @@ fn toggle_skill(state: &mut GameState, data: &GameData, index: usize) -> Result<
 }
 
 pub(crate) fn map_unlocked(state: &GameState, data: &GameData, map: MapId) -> bool {
+    map_block(state, data, map).is_none()
+}
+
+/// 地图为什么进不去。界面用它写「需 15 级」「毒蛇山谷 12/60」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapBlock {
+    /// 等级不够。
+    Level(u16),
+    /// 前置地图击杀不够：地图、已有、需要。
+    Kills(MapId, u64, u64),
+}
+
+/// 返回第一条没满足的条件。`None` 表示能进。
+pub fn map_block(state: &GameState, data: &GameData, map: MapId) -> Option<MapBlock> {
     let def = data.map(map);
     if state.level < def.req_level {
-        return false;
+        return Some(MapBlock::Level(def.req_level));
     }
     if let Some((prev, need)) = def
         .req_map_id
         .zip(def.req_map_kills.as_ref().map(|(_, n)| *n))
     {
-        return state.map_kills.get(&prev).copied().unwrap_or(0) >= need;
+        let have = state.map_kills.get(&prev).copied().unwrap_or(0);
+        if have < need {
+            return Some(MapBlock::Kills(prev, have, need));
+        }
     }
-    true
+    None
 }
 
 fn change_map(
@@ -671,6 +731,9 @@ fn change_map(
     state.combat = None;
     state.current_map = map;
     state.next_spawn_at = state.tick_count;
+    // 手动换图就是玩家自己做主，不再自动回原图，连死也重新计。
+    state.return_map = None;
+    state.death_streak = 0;
     events.push(GameEvent::MapChanged { map });
     Ok(())
 }
@@ -742,6 +805,9 @@ fn upgrade(
     if data.item(accessory.item).kind.gear().is_none() {
         return Err(CoreError::MissingMaterials);
     }
+    if accessory.locked {
+        return Err(CoreError::ItemLocked);
+    }
     let ore_index = state.inventory.iter().position(|stack| {
         matches!(data.item(stack.item).kind, ItemKind::Material(_)) && stack.item != accessory.item
     });
@@ -800,6 +866,7 @@ fn restock(
     data: &GameData,
     hp_target: u32,
     mp_target: u32,
+    events: &mut Vec<GameEvent>,
 ) -> Result<(), CoreError> {
     let potion_npc = data
         .npcs
@@ -816,57 +883,120 @@ fn restock(
     let Some(shop) = shop else {
         return Err(CoreError::BadIndex);
     };
-    let pick = |prefer_large: bool, hp: bool| -> Option<usize> {
-        let mut found = None;
+    let derived = *state.derived_stats(data);
+    // 挑一瓶不超过上限一半的最大规格。喝药线在一半附近，再大就是白花钱；
+    // 上限太低连小瓶都超的时候就买小瓶。
+    let pick = |hp: bool| -> Option<(usize, u64)> {
+        let cap = if hp { derived.max_hp } else { derived.max_mp } / 2;
+        let mut fits: Option<(usize, i32)> = None;
+        let mut smallest: Option<(usize, i32)> = None;
         for (index, id) in shop.stock_ids.iter().enumerate() {
             let ItemKind::Consumable(potion) = &data.item(*id).kind else {
                 continue;
             };
-            let matches = if hp {
-                potion.heal_hp > 0 && potion.heal_mp == 0
+            let amount = if hp && potion.heal_mp == 0 {
+                potion.heal_hp
+            } else if !hp && potion.heal_hp == 0 {
+                potion.heal_mp
             } else {
-                potion.heal_mp > 0 && potion.heal_hp == 0
+                0
             };
-            if !matches {
+            if amount <= 0 {
                 continue;
             }
-            let large = data.item(*id).id.contains("large");
-            if prefer_large == large || found.is_none() {
-                found = Some(index);
-                if prefer_large == large {
-                    break;
-                }
+            if amount <= cap && fits.is_none_or(|(_, best)| amount > best) {
+                fits = Some((index, amount));
+            }
+            if smallest.is_none_or(|(_, best)| amount < best) {
+                smallest = Some((index, amount));
             }
         }
-        found
+        let (index, _) = fits.or(smallest)?;
+        let unit = (f64::from(data.item(shop.stock_ids[index]).price) * f64::from(shop.buy_markup))
+            .ceil() as u64;
+        Some((index, unit.max(1)))
     };
-    let prefer_large = state.level >= 20;
-    let hp_owned: u32 = state
-        .inventory
-        .iter()
-        .filter(
-            |stack| matches!(&data.item(stack.item).kind, ItemKind::Consumable(p) if p.heal_hp > 0),
-        )
-        .map(|stack| stack.count)
-        .sum();
-    let mp_owned: u32 = state
-        .inventory
-        .iter()
-        .filter(
-            |stack| matches!(&data.item(stack.item).kind, ItemKind::Consumable(p) if p.heal_mp > 0),
-        )
-        .map(|stack| stack.count)
-        .sum();
-    if let Some(index) = pick(prefer_large, true) {
-        if hp_target > hp_owned {
-            let _ = buy(state, data, potion_npc, index, hp_target - hp_owned);
+    let owned = |hp: bool| -> u32 {
+        state
+            .inventory
+            .iter()
+            .filter(|stack| {
+                matches!(&data.item(stack.item).kind, ItemKind::Consumable(p)
+                    if if hp { p.heal_hp > 0 } else { p.heal_mp > 0 })
+            })
+            .map(|stack| stack.count)
+            .sum()
+    };
+    let hp_pick = pick(true);
+    let mp_pick = if derived.max_mp > 0 {
+        pick(false)
+    } else {
+        None
+    };
+    let hp_need = if hp_pick.is_some() {
+        hp_target.saturating_sub(owned(true))
+    } else {
+        0
+    };
+    let mp_need = if mp_pick.is_some() {
+        mp_target.saturating_sub(owned(false))
+    } else {
+        0
+    };
+    if hp_need == 0 && mp_need == 0 {
+        return Err(CoreError::StockFull);
+    }
+    // 钱不够时一瓶一瓶轮着买，哪边缺得多先补哪边，整单买不起也不至于一瓶都没有。
+    let mut budget = state.gold;
+    let (mut hp_buy, mut mp_buy) = (0u32, 0u32);
+    loop {
+        let hp_left = hp_need - hp_buy;
+        let mp_left = mp_need - mp_buy;
+        let hp_unit = hp_pick.map(|(_, unit)| unit).unwrap_or(u64::MAX);
+        let mp_unit = mp_pick.map(|(_, unit)| unit).unwrap_or(u64::MAX);
+        let hp_ok = hp_left > 0 && budget >= hp_unit;
+        let mp_ok = mp_left > 0 && budget >= mp_unit;
+        if !hp_ok && !mp_ok {
+            break;
+        }
+        let hp_first = if hp_ok && mp_ok {
+            u64::from(hp_buy) * u64::from(mp_need.max(1))
+                <= u64::from(mp_buy) * u64::from(hp_need.max(1))
+        } else {
+            hp_ok
+        };
+        if hp_first {
+            hp_buy += 1;
+            budget -= hp_unit;
+        } else {
+            mp_buy += 1;
+            budget -= mp_unit;
         }
     }
-    if let Some(index) = pick(prefer_large, false) {
-        if mp_target > mp_owned {
-            let _ = buy(state, data, potion_npc, index, mp_target - mp_owned);
+    if hp_buy == 0 && mp_buy == 0 {
+        return Err(CoreError::NotEnoughGold);
+    }
+    let before = state.gold;
+    let mut bought_hp = 0;
+    let mut bought_mp = 0;
+    if let Some((index, _)) = hp_pick.filter(|_| hp_buy > 0) {
+        if buy(state, data, potion_npc, index, hp_buy).is_ok() {
+            bought_hp = hp_buy;
         }
     }
+    if let Some((index, _)) = mp_pick.filter(|_| mp_buy > 0) {
+        if buy(state, data, potion_npc, index, mp_buy).is_ok() {
+            bought_mp = mp_buy;
+        }
+    }
+    if bought_hp == 0 && bought_mp == 0 {
+        return Err(CoreError::BagFull);
+    }
+    events.push(GameEvent::Restocked {
+        hp: bought_hp,
+        mp: bought_mp,
+        gold: before - state.gold,
+    });
     Ok(())
 }
 
@@ -943,6 +1073,15 @@ pub fn validate_name(name: &str) -> Result<(), String> {
         return Err("名字里不能有 \\ / : * ? \" < > |".to_string());
     }
     Ok(())
+}
+
+/// 按 F 补药的目标瓶数：(红, 蓝)。战士几乎不耗蓝，法师反过来。
+pub fn restock_targets(class: game_data::Class) -> (u32, u32) {
+    match class {
+        game_data::Class::Warrior => (30, 5),
+        game_data::Class::Mage => (25, 30),
+        game_data::Class::Taoist => (20, 20),
+    }
 }
 
 /// 毫秒间隔，给界面显示攻速。

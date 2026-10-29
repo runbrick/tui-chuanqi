@@ -579,7 +579,7 @@ pub struct SkillLevelDef {
     pub req_level: u16,
     /// 施放耗蓝。被动技能为 0。
     pub mp_cost: i32,
-    /// 冷却毫秒。0 表示替换这一拍普攻，不额外占冷却。
+    /// 冷却毫秒。0 表示每拍都能放。除了烈火这类蓄力，施法都会占掉这一拍普攻。
     pub cooldown_ms: u32,
     /// 效果倍率区间。
     pub power: FRange,
@@ -621,6 +621,13 @@ pub struct DamageEffect {
     /// 为 true 时伤害再乘 power 区间。
     #[serde(default = "default_true")]
     pub multiplier_from_power: bool,
+    /// 对不死系的倍率。地狱雷光这类克制不死的法术填大于 1。
+    #[serde(default = "default_unit")]
+    pub undead_bonus: f32,
+}
+
+fn default_unit() -> f32 {
+    1.0
 }
 
 fn default_single() -> TargetCount {
@@ -675,20 +682,27 @@ pub struct DebuffDefenseEffect {
     pub defense_pct: f32,
 }
 
-/// 毒。
+/// 毒和火墙这类持续伤害。每秒（10 tick）跳一次，不吃防御。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoisonEffect {
-    /// 持续 tick。
+    /// 持续 tick。按 10 tick 一跳，所以 80 就是 8 跳。
     pub duration_ticks: u32,
-    /// 每 tick 伤害 = 道术中值 * ratio * power。
+    /// 每跳伤害 = 来源属性中值 * ratio * power。
     pub tick_ratio: f32,
     /// 对不死系额外倍率。
     #[serde(default = "default_undead_bonus")]
     pub undead_bonus: f32,
+    /// 按哪条属性算。施毒术吃道术，火墙吃魔法。
+    #[serde(default = "default_poison_source")]
+    pub source: DamageSource,
 }
 
 fn default_undead_bonus() -> f32 {
     1.5
+}
+
+fn default_poison_source() -> DamageSource {
+    DamageSource::Taoism
 }
 
 /// 召唤。
@@ -827,11 +841,17 @@ pub struct ShopService {
     pub stock_ids: Vec<ItemId>,
 }
 
-/// 修理。费用 = 损失耐久 * 单价。
+/// 修理。
+///
+/// 填了 `price_ratio` 时，修满一件的价钱 = 物品售价 * 比例 * 损失比例，至少 1 金币。
+/// 没填就退回旧规则：损失耐久 * `cost_per_durability`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairService {
-    /// 每点耐久的金币。
+    /// 每点耐久的金币。只在没填 `price_ratio` 时用。
     pub cost_per_durability: u32,
+    /// 修满一件相当于售价的多少。
+    #[serde(default)]
+    pub price_ratio: Option<f32>,
 }
 
 /// 仓库。
@@ -861,6 +881,32 @@ pub struct HitChanceConfig {
     pub min: f64,
     /// 上限。
     pub max: f64,
+}
+
+/// 自然回复。每隔 `interval_ms` 回一次最大值的百分比，休息时不叠加。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegenConfig {
+    /// 间隔毫秒。0 表示关闭。
+    pub interval_ms: u32,
+    /// 每次回复最大生命的比例。
+    pub hp_ratio: f64,
+    /// 每次回复最大魔法的比例。
+    pub mp_ratio: f64,
+}
+
+/// 新角色自带的东西。装备能穿就直接穿上，穿不上（比如性别不符）就跳过；
+/// 其它物品放进背包。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartingItem {
+    /// 物品 slug。
+    pub item: String,
+    /// 数量。
+    #[serde(default = "default_one")]
+    pub count: u32,
+}
+
+fn default_one() -> u32 {
+    1
 }
 
 /// 一个职业的 1 级裸属性和每级成长。
@@ -978,6 +1024,19 @@ pub struct BalanceConfig {
     pub classes: ClassTable,
     /// 等级上限。
     pub max_level: u16,
+    /// 自然回复。缺省关闭。
+    #[serde(default)]
+    pub regen: RegenConfig,
+    /// 新角色自带物品。只影响新建角色，不改旧存档。
+    #[serde(default)]
+    pub starting_items: Vec<StartingItem>,
+    /// 同一级里连死这么多次就退回前置地图，升级后再自动往前推。0 表示不退。
+    #[serde(default = "default_fallback_deaths")]
+    pub fallback_after_deaths: u8,
+}
+
+fn default_fallback_deaths() -> u8 {
+    3
 }
 
 impl BalanceConfig {
