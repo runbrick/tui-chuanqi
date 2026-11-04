@@ -1,5 +1,6 @@
 //! 主循环。逻辑 tick 和渲染分开，输入只变成 `Command`。
 
+use crate::fx::BattleFx;
 use crate::logfmt::{format_event, LogLine};
 use crate::saveio::{CharacterMeta, SaveStore};
 use crate::ui;
@@ -215,6 +216,8 @@ pub struct App {
     pub bag_worn: bool,
     /// 日志往上翻了多少行。0 表示跟着最新。
     pub log_scroll: usize,
+    /// 战斗面板里的舞台动画。只在逻辑 tick 里推进。
+    pub fx: BattleFx,
     /// 上一帧的可点区域。画的时候写，点的时候读。
     pub hits: RefCell<HitMap>,
     /// 后台查到的新版本。没有就是还没查完或已经是最新。
@@ -251,6 +254,7 @@ impl App {
             shop_index: 0,
             bag_worn: false,
             log_scroll: 0,
+            fx: BattleFx::default(),
             hits: RefCell::new(HitMap::default()),
             update: None,
             update_rx: None,
@@ -351,6 +355,7 @@ impl App {
             return;
         };
         let events = state.tick(&self.data);
+        self.fx.step(state, &self.data, &events);
         let exp_total = state.stats.exp_gained;
         let mut notable = false;
         let mut left_town = false;
@@ -665,6 +670,7 @@ impl App {
                 self.log.clear();
                 self.log_scroll = 0;
                 self.exp_samples.clear();
+                self.fx = BattleFx::default();
                 self.remembered.clear();
                 self.bag_worn = false;
                 self.panel = Panel::Combat;

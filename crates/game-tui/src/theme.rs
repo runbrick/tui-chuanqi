@@ -107,3 +107,20 @@ pub fn dim() -> Style {
 pub fn hurt() -> Style {
     Style::default().fg(Color::LightRed)
 }
+
+/// 舞台上的普通怪。
+pub fn beast() -> Style {
+    Style::default().fg(Color::Magenta)
+}
+
+/// 舞台上的不死系怪。
+pub fn undead() -> Style {
+    Style::default().fg(Color::Gray)
+}
+
+/// 舞台上被打中的瞬间。
+pub fn flash() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+}

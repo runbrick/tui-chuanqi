@@ -13,6 +13,12 @@ use ratatui::Frame;
 
 const MIN_W: u16 = 80;
 const MIN_H: u16 = 24;
+/// 战斗舞台（含边框）的宽，以及文字区至少要留的宽度。
+const STAGE_W: u16 = 32;
+const STAGE_MIN_TEXT_W: u16 = 44;
+/// 舞台（含边框）的最小和最大高度。
+const STAGE_MIN_H: u16 = 8;
+const STAGE_MAX_H: u16 = 11;
 
 /// 画当前这一帧。
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -684,7 +690,44 @@ fn draw_combat(frame: &mut Frame, app: &App, area: Rect) {
             theme::dim(),
         )));
     }
-    frame.render_widget(panel("战斗", lines), area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled("战斗", theme::title()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let (text_area, stage_area) = split_stage(inner);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), text_area);
+    if let Some(stage_area) = stage_area {
+        draw_stage(frame, app, state, stage_area);
+    }
+}
+
+/// 战斗面板够宽时，右边留一块给战斗动画；窄了就只显示文字。
+fn split_stage(inner: Rect) -> (Rect, Option<Rect>) {
+    if inner.width < STAGE_MIN_TEXT_W + STAGE_W || inner.height < STAGE_MIN_H {
+        return (inner, None);
+    }
+    let text = Rect::new(inner.x, inner.y, inner.width - STAGE_W, inner.height);
+    let height = inner.height.min(STAGE_MAX_H);
+    let stage = Rect::new(
+        inner.x + inner.width - STAGE_W,
+        inner.y + (inner.height - height) / 2,
+        STAGE_W,
+        height,
+    );
+    (text, Some(stage))
+}
+
+fn draw_stage(frame: &mut Frame, app: &App, state: &GameState, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::dim());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let lines = app
+        .fx
+        .scene(state, &app.data, inner.width.into(), inner.height.into());
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// 主线下一张图还差什么。
