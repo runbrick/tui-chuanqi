@@ -263,3 +263,95 @@ fn small_window_outside_play_still_asks_for_more_room() {
     assert!(squash(&render(&app, 40, 10)).contains("放大"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// 假装后台安装线程已经起来，返回发送端给测试用。
+fn fake_install(app: &mut App) -> mpsc::Sender<InstallMsg> {
+    let (tx, rx) = mpsc::channel();
+    app.install_rx = Some(rx);
+    app.installing = Some(Progress::Connecting);
+    app.update = Some(Release {
+        tag: "v0.2.0".to_string(),
+        version: "0.2.0".to_string(),
+        asset_url: String::new(),
+        asset_name: String::new(),
+    });
+    tx
+}
+
+#[test]
+fn install_progress_shows_in_the_footer_and_does_not_expire() {
+    let (mut app, root) = playing(Class::Warrior);
+    let tx = fake_install(&mut app);
+    tx.send(InstallMsg::Progress(Progress::Downloading {
+        done: 1_048_576,
+        total: Some(4 * 1_048_576),
+    }))
+    .unwrap();
+    app.poll_install();
+    assert!(app.message.contains("25%"), "{}", app.message);
+    assert!(app.message_at.is_none(), "进度提示不能超时消失");
+    app.expire_message();
+    assert!(app.message.contains("25%"));
+    assert!(squash(&render(&app, 100, 30)).contains("25%"));
+    assert!(!app.quit);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn install_done_announces_success_then_quits_after_the_delay() {
+    let (mut app, root) = playing(Class::Warrior);
+    let tx = fake_install(&mut app);
+    tx.send(InstallMsg::Progress(Progress::Done)).unwrap();
+    drop(tx);
+    app.poll_install();
+    assert!(app.message.contains("成功"), "{}", app.message);
+    assert!(app.message.contains("重启"), "{}", app.message);
+    assert!(!app.quit, "得先让玩家看到提示");
+    app.poll_install();
+    assert!(app.message.contains("成功"), "等待期间提示不能被清掉");
+    assert!(!app.quit);
+    app.restart_at = Some(Instant::now());
+    app.poll_install();
+    assert!(app.quit);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn install_failure_is_reported_and_can_be_retried() {
+    let (mut app, root) = playing(Class::Warrior);
+    let tx = fake_install(&mut app);
+    tx.send(InstallMsg::Progress(Progress::Extracting)).unwrap();
+    tx.send(InstallMsg::Failed("下载中断".to_string())).unwrap();
+    drop(tx);
+    app.poll_install();
+    assert!(app.message.contains("更新失败"), "{}", app.message);
+    assert!(app.message.contains("下载中断"), "{}", app.message);
+    assert!(app.installing.is_none());
+    assert!(app.install_rx.is_none());
+    assert!(app.update.is_some(), "失败后要能再按 U 重试");
+    assert!(!app.quit);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn install_thread_dying_silently_counts_as_a_failure() {
+    let (mut app, root) = playing(Class::Warrior);
+    let tx = fake_install(&mut app);
+    drop(tx);
+    app.poll_install();
+    assert!(app.message.contains("更新失败"), "{}", app.message);
+    assert!(app.installing.is_none());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn pressing_u_while_installing_is_swallowed() {
+    let (mut app, root) = playing(Class::Warrior);
+    let _tx = fake_install(&mut app);
+    let before = app.panel;
+    press(&mut app, KeyCode::Char('u'));
+    assert_eq!(app.panel, before);
+    assert!(!app.upgrade_armed, "更新中的 U 不能落到武器升级上");
+    assert!(app.install_rx.is_some());
+    let _ = std::fs::remove_dir_all(root);
+}

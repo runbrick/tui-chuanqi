@@ -4,7 +4,7 @@ use crate::fx::BattleFx;
 use crate::logfmt::{format_event, LogLine};
 use crate::saveio::{CharacterMeta, SaveStore};
 use crate::ui;
-use crate::update::{self, Release};
+use crate::update::{self, Progress, Release};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 const TICK: Duration = Duration::from_millis(100);
 const MAX_CATCHUP: u32 = 5;
+/// 更新装好后留一会儿再退出，让玩家看到“已安装、正在重启”。
+const RESTART_DELAY: Duration = Duration::from_millis(1500);
 const LOG_CAP: usize = 500;
 /// 每隔这么久记一次累计经验，用来估算升级还要多久。
 const EXP_SAMPLE: Duration = Duration::from_secs(5);
@@ -182,6 +184,12 @@ pub struct BuyForm {
     pub error: String,
 }
 
+/// 后台安装线程发回主循环的消息。
+enum InstallMsg {
+    Progress(Progress),
+    Failed(String),
+}
+
 /// 整个前端状态。
 pub struct App {
     /// 静态数据。
@@ -223,6 +231,11 @@ pub struct App {
     /// 后台查到的新版本。没有就是还没查完或已经是最新。
     pub update: Option<Release>,
     update_rx: Option<Receiver<Result<Option<Release>, String>>>,
+    /// 正在下载安装时的进度。没在更新就是 `None`。
+    pub installing: Option<Progress>,
+    install_rx: Option<Receiver<InstallMsg>>,
+    /// 安装完成后到这个时刻就退出，交给替换脚本重启。
+    restart_at: Option<Instant>,
     quit: bool,
     last_save: Instant,
     /// 各面板上次选到哪一行，来回切面板不丢位置。
@@ -258,6 +271,9 @@ impl App {
             hits: RefCell::new(HitMap::default()),
             update: None,
             update_rx: None,
+            installing: None,
+            install_rx: None,
+            restart_at: None,
             quit: false,
             last_save: Instant::now(),
             remembered: BTreeMap::new(),
@@ -290,6 +306,7 @@ impl App {
             self.poll_input()?;
             self.expire_message();
             self.poll_update();
+            self.poll_install();
             let mut steps = 0;
             while acc >= TICK && steps < MAX_CATCHUP {
                 self.step_logic();
@@ -600,7 +617,8 @@ impl App {
         }
     }
 
-    /// 有待安装的版本就下载、换掉当前程序并退出。没有就返回 false，让原来的按键继续生效。
+    /// 有待安装的版本就在后台下载安装，进度显示在提示栏，装好后退出重启。
+    /// 没有新版本就返回 false，让原来的按键继续生效。
     fn apply_update(&mut self) -> bool {
         let Some(release) = self.update.clone() else {
             return false;
@@ -608,16 +626,75 @@ impl App {
         if self.typing_name() {
             return false;
         }
+        if self.installing.is_some() {
+            return true;
+        }
         self.save_if_playing();
-        match update::install(&release) {
-            Ok(()) => {
-                self.quit = true;
-                true
+        let (tx, rx) = mpsc::channel();
+        self.install_rx = Some(rx);
+        self.installing = Some(Progress::Connecting);
+        std::thread::spawn(move || {
+            let result = update::install(&release, &mut |progress| {
+                let _ = tx.send(InstallMsg::Progress(progress));
+            });
+            if let Err(err) = result {
+                let _ = tx.send(InstallMsg::Failed(err.to_string()));
             }
-            Err(err) => {
-                self.note(err.to_string());
-                true
+        });
+        true
+    }
+
+    /// 收后台安装线程的进度，刷新提示栏。装好后等一会儿再退出，失败则提示重试。
+    fn poll_install(&mut self) {
+        if self.restart_at.is_some_and(|at| Instant::now() >= at) {
+            self.quit = true;
+            return;
+        }
+        let mut failure = None;
+        let mut ended = false;
+        if let Some(rx) = &self.install_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(InstallMsg::Progress(progress)) => {
+                        self.installing = Some(progress);
+                        if progress == Progress::Done {
+                            self.restart_at = Some(Instant::now() + RESTART_DELAY);
+                            ended = true;
+                        }
+                    }
+                    Ok(InstallMsg::Failed(text)) => {
+                        failure = Some(text);
+                        ended = true;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        if self.restart_at.is_none() && failure.is_none() {
+                            failure = Some("更新线程意外退出".to_string());
+                        }
+                        ended = true;
+                        break;
+                    }
+                }
             }
+        }
+        if ended {
+            self.install_rx = None;
+        }
+        if let Some(text) = failure {
+            tracing::warn!(error = %text, "更新失败");
+            self.installing = None;
+            self.note(format!("更新失败：{text}。按 U 重试。"));
+            return;
+        }
+        if let Some(progress) = self.installing {
+            let version = self
+                .update
+                .as_ref()
+                .map_or("", |release| release.version.as_str());
+            let text = update::progress_text(progress, version);
+            // 不设时间，进度提示不会被 8 秒的过期清掉。
+            self.message = text;
+            self.message_at = None;
         }
     }
 
