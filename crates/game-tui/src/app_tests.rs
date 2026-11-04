@@ -238,3 +238,28 @@ fn gold_after_a_kill_joins_the_kill_line() {
     assert!(!app.log.iter().any(|line| line.text.starts_with("获得金币")));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn small_window_while_playing_shows_idle_info_only() {
+    let (mut app, root) = playing(Class::Warrior);
+    for _ in 0..300 {
+        app.step_logic();
+    }
+    for (w, h) in [(60, 16), (40, 10), (30, 6), (10, 2), (1, 1)] {
+        let screen = render(&app, w, h);
+        assert!(!squash(&screen).contains("放大"), "{screen}");
+    }
+    let screen = squash(&render(&app, 40, 10));
+    assert!(screen.contains("测试"), "{screen}");
+    assert!(screen.contains("HP"), "{screen}");
+    assert!(!screen.contains("1战斗"), "{screen}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn small_window_outside_play_still_asks_for_more_room() {
+    let (mut app, root) = playing(Class::Warrior);
+    app.screen = Screen::List;
+    assert!(squash(&render(&app, 40, 10)).contains("放大"));
+    let _ = std::fs::remove_dir_all(root);
+}

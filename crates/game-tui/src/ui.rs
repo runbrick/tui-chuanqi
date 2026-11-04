@@ -1,6 +1,7 @@
 //! 面板绘制。战斗日志一直留在下面。
 
 use crate::app::{App, BuyForm, CreateForm, DeleteForm, HitMap, Panel, Screen, SellForm};
+use crate::logfmt::LogLine;
 use crate::theme;
 use crate::util::{bar, display_width, pad_to, truncate_to};
 use game_core::{compare_equip, map_block, skill_rank, GameState, MapBlock, StatDelta};
@@ -29,6 +30,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
     if area.width < MIN_W || area.height < MIN_H {
+        if let (Screen::Play, Some(state)) = (&app.screen, &app.state) {
+            draw_idle(frame, app, state, area);
+            return;
+        }
         let lines = vec![
             Line::from(format!(
                 "请把窗口放大到至少 {MIN_W}×{MIN_H}。当前 {}×{}",
@@ -69,6 +74,99 @@ fn draw_clock(frame: &mut Frame, area: Rect) {
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+/// 窗口放不下完整布局时，挂机中只留要紧的几行：角色、血蓝、提醒、经验、战况，
+/// 剩下的行数给最新日志。不换行，超出宽度的部分直接截掉。
+fn draw_idle(frame: &mut Frame, app: &App, state: &GameState, area: Rect) {
+    let data = &app.data;
+    let derived = state.derived_stats(data);
+    let exp_need = data.balance.exp_to_next(state.level);
+    let permille = if exp_need == 0 {
+        0
+    } else {
+        (u128::from(state.exp) * 1000 / u128::from(exp_need)).min(1000) as i32
+    };
+    let hp_ratio = state.hp as f64 / derived.max_hp.max(1) as f64;
+    let rate = app.exp_per_second();
+    let eta = rate
+        .map(|rate| eta_text(exp_need.saturating_sub(state.exp) as f64 / rate))
+        .unwrap_or_default();
+    let map = data.map(state.current_map);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(state.name.clone(), theme::title()),
+            Span::raw(format!(" {} Lv.{}", state.class.label(), state.level)),
+            Span::styled(
+                if state.high_risk { " 高风险" } else { "" },
+                theme::danger(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("HP "),
+            Span::styled(
+                format_pair(state.hp, derived.max_hp),
+                Style::default().fg(theme::hp_color(hp_ratio)),
+            ),
+            Span::raw("  MP "),
+            Span::styled(
+                format_pair(state.mp, derived.max_mp),
+                Style::default().fg(theme::mp_color()),
+            ),
+        ]),
+    ];
+    if let Some(warning) = character_warning(app, state, hp_ratio) {
+        lines.push(Line::from(Span::styled(warning, theme::death())));
+    }
+    lines.push(Line::from(vec![
+        Span::raw("经验 "),
+        Span::styled(
+            format!("{:.1}%", f64::from(permille) / 10.0),
+            Style::default().fg(theme::exp_color()),
+        ),
+        Span::styled(format!("  {eta}"), theme::dim()),
+    ]));
+    let status = if let Some(combat) = &state.combat {
+        let monster = data.monster(combat.monster);
+        format!("{} {}/{}", monster.name, combat.hp.max(0), monster.hp)
+    } else if state.tick_count < state.resting_until {
+        format!(
+            "休息中，还剩 {} 秒",
+            (state.resting_until - state.tick_count).div_ceil(10)
+        )
+    } else if map.safe_zone {
+        "在城里".to_string()
+    } else {
+        "等待刷怪".to_string()
+    };
+    lines.push(Line::from(format!("{}  {status}", map.name)));
+    if let Some(rate) = rate {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "击杀 {}  死亡 {}  每小时经验 {:.0}",
+                state.stats.kills,
+                state.stats.deaths,
+                rate * 3600.0
+            ),
+            theme::dim(),
+        )));
+    }
+    if !app.message.is_empty() {
+        lines.push(Line::from(Span::styled(
+            app.message.clone(),
+            theme::level_up(),
+        )));
+    }
+
+    let room = (area.height as usize).saturating_sub(lines.len());
+    let start = app.log.len().saturating_sub(room);
+    lines.extend(
+        app.log
+            .range(start..)
+            .map(|line| Line::from(Span::styled(line.text.clone(), log_style(line)))),
+    );
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn beijing_now() -> (u32, u32, u32, String) {
@@ -1282,20 +1380,7 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line> = app
         .log
         .range(start..end)
-        .map(|line| {
-            let style = if line.rare {
-                theme::rare()
-            } else if line.bad {
-                theme::death()
-            } else if line.level {
-                theme::level_up()
-            } else if line.hurt {
-                theme::hurt()
-            } else {
-                theme::text()
-            };
-            Line::from(Span::styled(line.text.clone(), style))
-        })
+        .map(|line| Line::from(Span::styled(line.text.clone(), log_style(line))))
         .collect();
     let title = if scroll > 0 {
         format!("日志（往上翻了 {scroll} 行，End 回到最新）")
@@ -1303,6 +1388,20 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
         "日志".to_string()
     };
     frame.render_widget(list_panel(title, lines), area);
+}
+
+fn log_style(line: &LogLine) -> Style {
+    if line.rare {
+        theme::rare()
+    } else if line.bad {
+        theme::death()
+    } else if line.level {
+        theme::level_up()
+    } else if line.hurt {
+        theme::hurt()
+    } else {
+        theme::text()
+    }
 }
 
 fn panel<'a>(title: impl Into<String>, lines: Vec<Line<'a>>) -> Paragraph<'a> {
