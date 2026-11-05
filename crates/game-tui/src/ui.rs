@@ -432,6 +432,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("城里    X 卖未锁定的白装   R 修理   F 按职业把红蓝药补满"),
         Line::from("吃药    P 开关   [ ] 调血线   - = 调蓝线（中文输入法下也能按）"),
         Line::from("升级    U 先看材料和成功率，再按 U 才执行；按别的键取消"),
+        Line::from("更新    F3 下载并安装新版本；失败后按 F3 重试"),
         Line::from("其它    F2 伪装成时钟   Q 保存并退出"),
         Line::from(""),
         Line::from("装备颜色：白、绿、蓝、黄、红。死亡或没药回城后，休息完自动回原来的图。"),
@@ -1454,7 +1455,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 fn update_notice(app: &App) -> Option<String> {
     app.update.as_ref().map(|release| {
         format!(
-            "有新版本 {}（现在是 {}）。按 U 下载并重启。",
+            "有新版本 {}（现在是 {}）。按 F3 下载并重启。",
             release.version,
             crate::update::current_version()
         )
