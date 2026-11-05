@@ -329,7 +329,7 @@ fn draw_sell(frame: &mut Frame, app: &App, form: &SellForm, area: Rect) {
             let def = app.data.item(stack.item);
             let count = form.digits.parse::<u32>().unwrap_or(0).min(stack.count);
             (
-                def.name.clone(),
+                format!("{}{}", def.name, upgrade_note(stack)),
                 stack.count,
                 game_core::sale_gold(&app.data, stack.item, count),
             )
@@ -631,24 +631,41 @@ fn draw_equipment(frame: &mut Frame, app: &App, area: Rect) {
 /// 已穿装备的一行：名字、强化、耐久（不满才显示）、锁、损坏。
 fn worn_text(app: &App, stack: &game_core::ItemStack) -> String {
     let def = app.data.item(stack.item);
-    let mut text = def.name.clone();
-    if stack.upgrade > 0 {
-        text.push_str(&format!(" +{}", stack.upgrade));
-    }
-    if stack.is_broken(&app.data) {
-        text.push_str(" 损坏");
-    } else if let Some(gear) = def.kind.gear() {
-        if gear.durability > 0 && stack.durability < gear.durability {
-            text.push_str(&format!(
-                " {}%",
-                u64::from(stack.durability) * 100 / u64::from(gear.durability)
-            ));
-        }
-    }
+    let mut text = format!(
+        "{}{}{}",
+        def.name,
+        upgrade_note(stack),
+        durability_note(app, stack, def)
+    );
     if stack.locked {
         text.push_str(" 锁");
     }
     text
+}
+
+/// 强化等级标注，如 `+3`。没强化过则为空。
+fn upgrade_note(stack: &game_core::ItemStack) -> String {
+    if stack.upgrade > 0 {
+        format!(" +{}", stack.upgrade)
+    } else {
+        String::new()
+    }
+}
+
+/// 装备损坏或耐久不满时的标注。非装备或耐久满时为空。
+fn durability_note(app: &App, stack: &game_core::ItemStack, def: &ItemDef) -> String {
+    if stack.is_broken(&app.data) {
+        return " 损坏".to_string();
+    }
+    if let Some(gear) = def.kind.gear() {
+        if gear.durability > 0 && stack.durability < gear.durability {
+            return format!(
+                " {}%",
+                u64::from(stack.durability) * 100 / u64::from(gear.durability)
+            );
+        }
+    }
+    String::new()
 }
 
 fn draw_combat(frame: &mut Frame, app: &App, area: Rect) {
@@ -955,9 +972,11 @@ fn draw_bag(frame: &mut Frame, app: &App, area: Rect) {
         };
         let lock = if stack.locked { " 锁" } else { "" };
         let mut spans = vec![Span::raw(format!(
-            "{}{rank}{}{count}{lock}",
+            "{}{}{rank}{}{}{count}{lock}",
             def.name,
-            item_note(def)
+            upgrade_note(stack),
+            item_note(def),
+            durability_note(app, stack, def)
         ))];
         let reason = requirement(state, def);
         if let Some(reason) = &reason {
