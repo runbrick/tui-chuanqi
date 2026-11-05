@@ -317,6 +317,29 @@ fn install_done_announces_success_then_quits_after_the_delay() {
 }
 
 #[test]
+fn update_notice_stays_visible_after_temporary_messages_expire() {
+    let (mut app, root) = playing(Class::Warrior);
+    app.update = Some(Release {
+        tag: "v0.2.0".to_string(),
+        version: "0.2.0".to_string(),
+        asset_url: String::new(),
+        asset_name: String::new(),
+    });
+
+    app.note("临时操作提示");
+    let screen = squash(&render(&app, 100, 30));
+    assert!(screen.contains("临时操作提示"), "{screen}");
+    assert!(!screen.contains("按U下载并重启"), "{screen}");
+
+    app.message.clear();
+    app.message_at = None;
+    let screen = squash(&render(&app, 100, 30));
+    assert!(screen.contains("有新版本0.2.0"), "{screen}");
+    assert!(screen.contains("按U下载并重启"), "{screen}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn install_failure_is_reported_and_can_be_retried() {
     let (mut app, root) = playing(Class::Warrior);
     let tx = fake_install(&mut app);

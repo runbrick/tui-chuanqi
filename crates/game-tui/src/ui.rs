@@ -152,11 +152,13 @@ fn draw_idle(frame: &mut Frame, app: &App, state: &GameState, area: Rect) {
             theme::dim(),
         )));
     }
-    if !app.message.is_empty() {
-        lines.push(Line::from(Span::styled(
-            app.message.clone(),
-            theme::level_up(),
-        )));
+    let notice = if app.message.is_empty() {
+        update_notice(app)
+    } else {
+        Some(app.message.as_str().to_string())
+    };
+    if let Some(notice) = notice {
+        lines.push(Line::from(Span::styled(notice, theme::level_up())));
     }
 
     let room = (area.height as usize).saturating_sub(lines.len());
@@ -1439,12 +1441,24 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(label, style));
     }
     spans.push(Span::styled("  F1帮助  Q退出  F2伪装", theme::dim()));
-    let notice = if app.message.is_empty() {
+    let notice = if let Some(notice) = update_notice(app).filter(|_| app.message.is_empty()) {
+        Line::from(Span::styled(notice, theme::level_up()))
+    } else if app.message.is_empty() {
         Line::from(Span::styled(panel_hint(app), theme::dim()))
     } else {
         Line::from(Span::styled(app.message.clone(), theme::level_up()))
     };
     frame.render_widget(Paragraph::new(vec![Line::from(spans), notice]), area);
+}
+
+fn update_notice(app: &App) -> Option<String> {
+    app.update.as_ref().map(|release| {
+        format!(
+            "有新版本 {}（现在是 {}）。按 U 下载并重启。",
+            release.version,
+            crate::update::current_version()
+        )
+    })
 }
 
 /// 没有提示消息时，底部第二行显示当前面板最常用的键。
