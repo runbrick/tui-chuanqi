@@ -250,7 +250,8 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         theme::level_up(),
     )));
     record_list(app, area, 1, range);
-    frame.render_widget(list_panel("角色列表", lines), area);
+    let title = format!("角色列表  v{}", crate::update::current_version());
+    frame.render_widget(list_panel(title, lines), area);
 }
 
 fn draw_create(frame: &mut Frame, form: &CreateForm, area: Rect) {
@@ -1367,6 +1368,10 @@ fn draw_stats(frame: &mut Frame, app: &App, area: Rect) {
     for achievement in &state.achievements {
         lines.push(Line::from(format!("成就 {}", achievement.label())));
     }
+    lines.push(Line::from(format!(
+        "版本 v{}",
+        crate::update::current_version()
+    )));
     frame.render_widget(panel("统计", lines), area);
 }
 
