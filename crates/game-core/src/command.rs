@@ -64,9 +64,6 @@ pub enum CoreError {
     /// 锁定的东西不能卖。
     #[error("这件东西锁住了，先按 L 解锁")]
     ItemLocked,
-    /// 强化过的武器不能直接卖。
-    #[error("强化过的武器不能卖")]
-    Upgraded,
     /// 数量不够。
     #[error("数量不够，这叠只有 {0} 个")]
     NotEnoughCount(u32),
@@ -138,7 +135,7 @@ pub enum Command {
         /// 卖出数量。
         count: u32,
     },
-    /// 卖掉白色未强化装备。
+    /// 卖掉白色未锁定装备。
     SellJunk,
     /// 从某 NPC 商店买。
     Buy {
@@ -433,9 +430,6 @@ fn sell_one(
     if stack.locked {
         return Err(CoreError::ItemLocked);
     }
-    if stack.upgrade > 0 {
-        return Err(CoreError::Upgraded);
-    }
     if count > stack.count {
         return Err(CoreError::NotEnoughCount(stack.count));
     }
@@ -460,10 +454,7 @@ fn sell_junk(state: &mut GameState, data: &GameData) {
     let mut gold = 0u64;
     state.inventory.retain(|stack| {
         let def = data.item(stack.item);
-        let junk = def.quality == Quality::White
-            && def.kind.gear().is_some()
-            && !stack.locked
-            && stack.upgrade == 0;
+        let junk = def.quality == Quality::White && def.kind.gear().is_some() && !stack.locked;
         if junk {
             gold = gold.saturating_add(
                 (f64::from(def.price) * rate * f64::from(stack.count)).floor() as u64,
@@ -832,6 +823,7 @@ fn upgrade(
     if success {
         if let Some(weapon) = state.equipment[EquipSlot::Weapon.index()].as_mut() {
             weapon.upgrade = weapon.upgrade.saturating_add(1);
+            weapon.locked = true;
             let plus = weapon.upgrade;
             state.invalidate_derived();
             events.push(GameEvent::UpgradeSucceeded { plus });

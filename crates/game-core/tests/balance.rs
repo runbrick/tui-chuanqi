@@ -335,6 +335,30 @@ fn locked_gear_is_never_used_as_upgrade_material() {
 }
 
 #[test]
+fn upgraded_weapon_is_locked_until_manually_unlocked_for_sale() {
+    let (mut state, data) = bare(Class::Warrior, Gender::Male);
+    let sword = data.item_id("wooden_sword").unwrap();
+    state.equipment[EquipSlot::Weapon.index()] =
+        Some(game_core::ItemStack::fresh(sword, 1, &data, &mut state.rng));
+    let mut upgraded = game_core::ItemStack::fresh(sword, 1, &data, &mut state.rng);
+    upgraded.upgrade = 1;
+    upgraded.locked = true;
+    state.inventory.push(upgraded);
+
+    assert_eq!(
+        Command::Sell { index: 0, count: 1 }.apply(&mut state, &data),
+        Err(CoreError::ItemLocked)
+    );
+    Command::LockInventory { index: 0 }
+        .apply(&mut state, &data)
+        .unwrap();
+    Command::Sell { index: 0, count: 1 }
+        .apply(&mut state, &data)
+        .unwrap();
+    assert!(state.inventory.is_empty());
+}
+
+#[test]
 fn manual_map_change_cancels_the_auto_return() {
     let (mut state, data) = bare(Class::Warrior, Gender::Male);
     let city = data.safe_map().unwrap();

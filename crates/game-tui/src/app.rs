@@ -1484,10 +1484,6 @@ impl App {
             self.note(CoreError::ItemLocked.to_string());
             return;
         }
-        if stack.upgrade > 0 {
-            self.note(CoreError::Upgraded.to_string());
-            return;
-        }
         self.screen = Screen::Sell(SellForm {
             index: self.selected,
             digits: stack.count.to_string(),
@@ -1559,7 +1555,7 @@ impl App {
     fn sale_notice(&self, index: usize, count: u32) -> Option<String> {
         let state = self.state.as_ref()?;
         let stack = state.inventory.get(index)?;
-        if stack.locked || stack.upgrade > 0 || count == 0 || count > stack.count {
+        if stack.locked || count == 0 || count > stack.count {
             return None;
         }
         let def = self.data.item(stack.item);
@@ -1578,8 +1574,7 @@ impl App {
             let def = self.data.item(stack.item);
             let junk = def.quality == game_data::Quality::White
                 && def.kind.gear().is_some()
-                && !stack.locked
-                && stack.upgrade == 0;
+                && !stack.locked;
             if junk {
                 pieces = pieces.saturating_add(stack.count);
                 gold =
