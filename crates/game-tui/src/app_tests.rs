@@ -204,6 +204,12 @@ fn buy_quantity_replaces_prefill_and_caps_at_limit() {
 #[test]
 fn upgrade_confirmation_is_cancelled_by_other_keys() {
     let (mut app, root) = playing(Class::Warrior);
+    app.update = Some(Release {
+        tag: "v0.2.0".to_string(),
+        version: "0.2.0".to_string(),
+        asset_url: String::new(),
+        asset_name: String::new(),
+    });
     app.state.as_mut().unwrap().gold = 100_000;
     let ore = app.data.item_id("black_iron_ore").unwrap();
     let ring = app.data.item_id("iron_ring").unwrap();
@@ -317,6 +323,29 @@ fn install_done_announces_success_then_quits_after_the_delay() {
 }
 
 #[test]
+fn update_notice_stays_visible_after_temporary_messages_expire() {
+    let (mut app, root) = playing(Class::Warrior);
+    app.update = Some(Release {
+        tag: "v0.2.0".to_string(),
+        version: "0.2.0".to_string(),
+        asset_url: String::new(),
+        asset_name: String::new(),
+    });
+
+    app.note("临时操作提示");
+    let screen = squash(&render(&app, 100, 30));
+    assert!(screen.contains("临时操作提示"), "{screen}");
+    assert!(!screen.contains("按F3下载并重启"), "{screen}");
+
+    app.message.clear();
+    app.message_at = None;
+    let screen = squash(&render(&app, 100, 30));
+    assert!(screen.contains("有新版本0.2.0"), "{screen}");
+    assert!(screen.contains("按F3下载并重启"), "{screen}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn install_failure_is_reported_and_can_be_retried() {
     let (mut app, root) = playing(Class::Warrior);
     let tx = fake_install(&mut app);
@@ -328,7 +357,7 @@ fn install_failure_is_reported_and_can_be_retried() {
     assert!(app.message.contains("下载中断"), "{}", app.message);
     assert!(app.installing.is_none());
     assert!(app.install_rx.is_none());
-    assert!(app.update.is_some(), "失败后要能再按 U 重试");
+    assert!(app.update.is_some(), "失败后要能再按 F3 重试");
     assert!(!app.quit);
     let _ = std::fs::remove_dir_all(root);
 }
@@ -345,13 +374,13 @@ fn install_thread_dying_silently_counts_as_a_failure() {
 }
 
 #[test]
-fn pressing_u_while_installing_is_swallowed() {
+fn pressing_f3_while_installing_is_swallowed() {
     let (mut app, root) = playing(Class::Warrior);
     let _tx = fake_install(&mut app);
     let before = app.panel;
-    press(&mut app, KeyCode::Char('u'));
+    press(&mut app, KeyCode::F(3));
     assert_eq!(app.panel, before);
-    assert!(!app.upgrade_armed, "更新中的 U 不能落到武器升级上");
+    assert!(!app.upgrade_armed, "更新中的 F3 不应触发武器升级");
     assert!(app.install_rx.is_some());
     let _ = std::fs::remove_dir_all(root);
 }

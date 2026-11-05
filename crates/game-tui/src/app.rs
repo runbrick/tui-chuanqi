@@ -456,7 +456,7 @@ impl App {
         if self.disguised {
             return;
         }
-        if matches!(key.code, KeyCode::Char('u' | 'U')) && self.apply_update() {
+        if key.code == KeyCode::F(3) && self.apply_update() {
             return;
         }
         if self.help_key(key) {
@@ -596,7 +596,7 @@ impl App {
         let message = match rx.try_recv() {
             Ok(Ok(Some(release))) => {
                 let text = format!(
-                    "有新版本 {}（现在是 {}）。按 U 下载并重启。",
+                    "有新版本 {}（现在是 {}）。按 F3 下载并重启。",
                     release.version,
                     update::current_version()
                 );
@@ -683,7 +683,7 @@ impl App {
         if let Some(text) = failure {
             tracing::warn!(error = %text, "更新失败");
             self.installing = None;
-            self.note(format!("更新失败：{text}。按 U 重试。"));
+            self.note(format!("更新失败：{text}。按 F3 重试。"));
             return;
         }
         if let Some(progress) = self.installing {

@@ -152,11 +152,13 @@ fn draw_idle(frame: &mut Frame, app: &App, state: &GameState, area: Rect) {
             theme::dim(),
         )));
     }
-    if !app.message.is_empty() {
-        lines.push(Line::from(Span::styled(
-            app.message.clone(),
-            theme::level_up(),
-        )));
+    let notice = if app.message.is_empty() {
+        update_notice(app)
+    } else {
+        Some(app.message.as_str().to_string())
+    };
+    if let Some(notice) = notice {
+        lines.push(Line::from(Span::styled(notice, theme::level_up())));
     }
 
     let room = (area.height as usize).saturating_sub(lines.len());
@@ -430,6 +432,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("城里    X 卖未锁定的白装   R 修理   F 按职业把红蓝药补满"),
         Line::from("吃药    P 开关   [ ] 调血线   - = 调蓝线（中文输入法下也能按）"),
         Line::from("升级    U 先看材料和成功率，再按 U 才执行；按别的键取消"),
+        Line::from("更新    F3 下载并安装新版本；失败后按 F3 重试"),
         Line::from("其它    F2 伪装成时钟   Q 保存并退出"),
         Line::from(""),
         Line::from("装备颜色：白、绿、蓝、黄、红。死亡或没药回城后，休息完自动回原来的图。"),
@@ -1439,12 +1442,24 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(label, style));
     }
     spans.push(Span::styled("  F1帮助  Q退出  F2伪装", theme::dim()));
-    let notice = if app.message.is_empty() {
+    let notice = if let Some(notice) = update_notice(app).filter(|_| app.message.is_empty()) {
+        Line::from(Span::styled(notice, theme::level_up()))
+    } else if app.message.is_empty() {
         Line::from(Span::styled(panel_hint(app), theme::dim()))
     } else {
         Line::from(Span::styled(app.message.clone(), theme::level_up()))
     };
     frame.render_widget(Paragraph::new(vec![Line::from(spans), notice]), area);
+}
+
+fn update_notice(app: &App) -> Option<String> {
+    app.update.as_ref().map(|release| {
+        format!(
+            "有新版本 {}（现在是 {}）。按 F3 下载并重启。",
+            release.version,
+            crate::update::current_version()
+        )
+    })
 }
 
 /// 没有提示消息时，底部第二行显示当前面板最常用的键。
