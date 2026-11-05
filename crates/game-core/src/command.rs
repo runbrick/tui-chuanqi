@@ -274,14 +274,9 @@ pub fn compact_inventory(state: &mut GameState, data: &GameData) {
 fn compact(slots: &mut Vec<ItemStack>, data: &GameData) {
     let mut index = 0;
     while index < slots.len() {
-        if !data.item(slots[index].item).stackable {
-            index += 1;
-            continue;
-        }
-        let item = slots[index].item;
         let mut next = index + 1;
         while next < slots.len() {
-            if slots[next].item == item {
+            if can_merge(&slots[index], &slots[next], data) {
                 let extra = slots[next].count;
                 slots[index].count = slots[index].count.saturating_add(extra);
                 slots.remove(next);
@@ -291,6 +286,31 @@ fn compact(slots: &mut Vec<ItemStack>, data: &GameData) {
         }
         index += 1;
     }
+}
+
+fn can_merge(left: &ItemStack, right: &ItemStack, data: &GameData) -> bool {
+    if left.item != right.item {
+        return false;
+    }
+    if data.item(left.item).stackable {
+        return true;
+    }
+    data.item(left.item).kind.gear().is_some()
+        && left.durability == right.durability
+        && left.upgrade == right.upgrade
+        && left.locked == right.locked
+        && left.purity == right.purity
+}
+
+fn add_to_stack(slots: &mut [ItemStack], stack: &ItemStack, data: &GameData) -> bool {
+    let Some(existing) = slots
+        .iter_mut()
+        .find(|existing| can_merge(existing, stack, data))
+    else {
+        return false;
+    };
+    existing.count = existing.count.saturating_add(stack.count);
+    true
 }
 
 fn take_bag(state: &mut GameState, index: usize) -> Result<ItemStack, CoreError> {
@@ -319,12 +339,37 @@ fn equip(
         return Err(CoreError::GenderMismatch(gear.gender.label().to_string()));
     }
     let slot = find_slot(state, gear.slot).ok_or(CoreError::CannotEquip)?;
-    let stack = take_bag(state, index)?;
+    if let Some(old) = state.equipment[slot.index()].as_ref() {
+        let current = &state.inventory[index];
+        let frees_slot = current.count == 1;
+        let old_merges = state
+            .inventory
+            .iter()
+            .enumerate()
+            .any(|(other_index, candidate)| {
+                other_index != index && can_merge(candidate, old, data)
+            });
+        if !frees_slot
+            && !old_merges
+            && state.inventory.len() >= data.balance.inventory_slots as usize
+        {
+            return Err(CoreError::BagFull);
+        }
+    }
+    let mut stack = state.inventory[index].clone();
+    stack.count = 1;
+    if state.inventory[index].count > 1 {
+        state.inventory[index].count -= 1;
+    } else {
+        state.inventory.remove(index);
+    }
     let id = stack.item;
     if let Some(old) = state.equipment[slot.index()].take() {
-        state
-            .inventory
-            .insert(index.min(state.inventory.len()), old);
+        if !add_to_stack(&mut state.inventory, &old, data) {
+            state
+                .inventory
+                .insert(index.min(state.inventory.len()), old);
+        }
     }
     state.equipment[slot.index()] = Some(stack);
     state.invalidate_derived();
@@ -351,14 +396,17 @@ fn unequip(
     slot: EquipSlot,
     events: &mut Vec<GameEvent>,
 ) -> Result<(), CoreError> {
-    if state.inventory.len() >= data.balance.inventory_slots as usize {
-        return Err(CoreError::BagFull);
-    }
     let stack = state.equipment[slot.index()]
         .take()
         .ok_or(CoreError::EmptySlot)?;
+    if !add_to_stack(&mut state.inventory, &stack, data) {
+        if state.inventory.len() >= data.balance.inventory_slots as usize {
+            state.equipment[slot.index()] = Some(stack);
+            return Err(CoreError::BagFull);
+        }
+        state.inventory.push(stack.clone());
+    }
     events.push(GameEvent::Unequipped { id: stack.item });
-    state.inventory.push(stack);
     state.invalidate_derived();
     state.clamp_vitals(data);
     Ok(())
@@ -520,8 +568,20 @@ fn can_fit(state: &GameState, data: &GameData, item: ItemId, count: u32) -> bool
     if data.item(item).stackable && state.inventory.iter().any(|stack| stack.item == item) {
         return true;
     }
+    let gear_merge = if data.item(item).kind.gear().is_some() {
+        let mut rng = state.rng.clone();
+        let incoming = ItemStack::fresh(item, 1, data, &mut rng);
+        state
+            .inventory
+            .iter()
+            .any(|stack| can_merge(stack, &incoming, data))
+    } else {
+        false
+    };
     let need = if data.item(item).stackable {
         1
+    } else if gear_merge {
+        0
     } else {
         count as usize
     };
@@ -580,8 +640,8 @@ fn repair_all(
         .chain(state.inventory.iter())
     {
         if let Some(cost) = repair_cost(data, service, stack) {
-            bill = bill.saturating_add(cost);
-            pieces += 1;
+            bill = bill.saturating_add(cost.saturating_mul(u64::from(stack.count)));
+            pieces = pieces.saturating_add(stack.count);
         }
     }
     if pieces == 0 {
@@ -629,19 +689,18 @@ fn storage_limit(data: &GameData) -> usize {
 }
 
 fn deposit(state: &mut GameState, data: &GameData, index: usize) -> Result<(), CoreError> {
-    if state.storage.len() >= storage_limit(data)
-        && !data
-            .item(state.inventory.get(index).ok_or(CoreError::BadIndex)?.item)
-            .stackable
-    {
+    let incoming = state.inventory.get(index).ok_or(CoreError::BadIndex)?;
+    let mergeable = data.item(incoming.item).stackable
+        || state
+            .storage
+            .iter()
+            .any(|existing| can_merge(existing, incoming, data));
+    if state.storage.len() >= storage_limit(data) && !mergeable {
         return Err(CoreError::StorageFull);
     }
     let stack = take_bag(state, index)?;
-    if data.item(stack.item).stackable {
-        if let Some(existing) = state.storage.iter_mut().find(|s| s.item == stack.item) {
-            existing.count = existing.count.saturating_add(stack.count);
-            return Ok(());
-        }
+    if add_to_stack(&mut state.storage, &stack, data) {
+        return Ok(());
     }
     if state.storage.len() >= storage_limit(data) {
         state
@@ -657,11 +716,19 @@ fn withdraw(state: &mut GameState, data: &GameData, index: usize) -> Result<(), 
     if index >= state.storage.len() {
         return Err(CoreError::BadIndex);
     }
-    if state.inventory.len() >= data.balance.inventory_slots as usize {
+    let stored = &state.storage[index];
+    let mergeable = data.item(stored.item).stackable
+        || state
+            .inventory
+            .iter()
+            .any(|existing| can_merge(existing, stored, data));
+    if state.inventory.len() >= data.balance.inventory_slots as usize && !mergeable {
         return Err(CoreError::BagFull);
     }
     let stack = state.storage.remove(index);
-    state.inventory.push(stack);
+    if !add_to_stack(&mut state.inventory, &stack, data) {
+        state.inventory.push(stack);
+    }
     Ok(())
 }
 

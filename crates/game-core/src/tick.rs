@@ -1079,6 +1079,20 @@ fn push_stack(state: &mut GameState, data: &GameData, item: ItemId, count: u32) 
             return true;
         }
     }
+    if data.item(item).kind.gear().is_some() {
+        let mut rng = state.rng.clone();
+        let incoming = crate::state::ItemStack::fresh(item, 1, data, &mut rng);
+        if let Some(stack) = state.inventory.iter_mut().find(|stack| {
+            stack.item == item
+                && stack.durability == incoming.durability
+                && stack.upgrade == incoming.upgrade
+                && stack.locked == incoming.locked
+                && stack.purity == incoming.purity
+        }) {
+            stack.count = stack.count.saturating_add(count);
+            return true;
+        }
+    }
     if state.inventory.len() >= data.balance.inventory_slots as usize {
         return false;
     }
