@@ -16,7 +16,7 @@ cargo run -p r-chuanqi --bin check-content               # 内容表体检
 
 ### 安装发布包
 
-发布包是安装程序，不是解压即用的压缩包。下载 [**r-chuanqi-setup-x86\_64-pc-windows-msvc.exe**](https://github.com/runbrick/tui-chuanqi/releases/download/v1.1.1/r-chuanqi-setup-x86_64-pc-windows-msvc.exe) 双击运行：
+发布包是安装程序，不是解压即用的压缩包。下载 [**r-chuanqi-setup-x86_64-pc-windows-msvc.exe**](https://github.com/runbrick/tui-chuanqi/releases/download/v1.1.1/r-chuanqi-setup-x86_64-pc-windows-msvc.exe) 双击运行：
 
 - **Windows**：装到 `%LOCALAPPDATA%\Programs\r-chuanqi`，写入用户 PATH，开始菜单和「设置 → 应用」里留下入口
 - **其它系统**：装到 `~/.local/share/tui-game`，命令放在 `~/.local/bin/r-chuanqi （目前没有测试，如果有问题请提 issues）`
@@ -95,3 +95,10 @@ cargo run -p r-chuanqi --bin check-content               # 内容表体检
 | [doc/03-game-design.md](doc/03-game-design.md) | 玩法循环、战斗公式、掉落与挂机设计           |
 | [doc/05-roadmap.md](doc/05-roadmap.md)         | 任务规划（按阶段逐条执行，带验收标准）         |
 | [doc/decisions.md](doc/decisions.md)           | 已拍板的设计决策（ADR-001 … ADR-007） |
+
+
+
+
+## 特别鸣谢
+
+1. 学 AI 上 LinuxDO : [https://linux.do/](https://linux.do/)
